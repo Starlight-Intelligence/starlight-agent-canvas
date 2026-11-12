@@ -13,9 +13,9 @@
   "dependencies": {
     "@starlight-agent-canvas/core": "workspace:*",
     "@xyflow/react": "^12.12.1",
-    "ai": "^7.0.164",
+    "ai": "^7.0.166",
     "lucide-react": "^1.70.0",
-    "next": "^16.4.5",
+    "next": "^16.4.6",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
   },
