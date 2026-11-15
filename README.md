@@ -1,20 +1,40 @@
 # Starlight Agent Canvas
 
-[![CI](https://github.com/frankxai/starlight-agent-canvas/actions/workflows/ci.yml/badge.svg)](https://github.com/frankxai/starlight-agent-canvas/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-f5c36a.svg)](LICENSE)
+[![CI](https://github.com/Starlight-Intelligence/starlight-agent-canvas/actions/workflows/ci.yml/badge.svg)](https://github.com/Starlight-Intelligence/starlight-agent-canvas/actions/workflows/ci.yml)
 
-OSS-first, MCP-native research and workflow canvas for Codex, Claude, Gemini, creators, and Starlight systems.
+Starlight Agent Canvas is a local, spatial canvas where you and your coding agents work on the same graph of sources, notes, prompts, and outputs.
 
-Starlight Agent Canvas is a local-first agent context layer: sources, prompts, MCP tools, agent runs, and outputs become typed nodes on a portable canvas that humans and agents can both inspect.
+You paste or drop material into a web canvas and it becomes typed, connected nodes. An agent such as Codex, Claude, or Gemini reads and extends that same canvas through a local MCP server. Everything is stored as files on your machine, and the built-in actions run without any API key.
 
-![Starlight Agent Canvas self-serve video intake](docs/visual-qa/desktop-self-serve-video-mapped.png)
+![The canvas workspace with a URL source node and a note node mapped, the action drawer, and the source inspector](docs/visual-qa/desktop-self-serve-video-mapped.png)
 
-## Install, Open, Prove
+## Who it is for
 
-Open the app fast:
+- People who research with links, videos, PDFs, and notes and want the result in a form an agent can pick up.
+- Developers who use MCP-capable coding agents and want a shared, inspectable context instead of pasting text between chats.
+- Operators of the Starlight repo estate, who get planning templates, a seeded operating canvas, and read-only views of estate context.
 
-```powershell
-git clone https://github.com/frankxai/starlight-agent-canvas.git
+Version 0.1 is single-user and runs on one machine. There are no accounts, teams, or hosted sync.
+
+## What it does
+
+- **Canvas workspace** (`apps/web`): a Next.js app built on `@xyflow/react`. Drag nodes, connect them, edit titles and bodies, and inspect each source's receipt: kind, ingest method, chunks, and character count.
+- **Source intake** (`packages/core/src/ingest.ts`, `source-intake.ts`): YouTube links, other video links, image URLs and uploads, public web URLs, PDFs, text, Markdown, JSON, CSV, and plain notes. Each source is saved as an artifact with chunks and provenance, plus a node on the graph.
+- **Local actions** (`packages/core/src/actions.ts`): summarize, extract claims, compare sources, build a decision matrix, write an implementation brief, and answer questions with citations back to source chunks. These are deterministic and make no model calls.
+- **Exports** (`packages/core/src/exporters.ts`): portable JSON that can be imported again, readable Markdown, an agent context packet, and a Codex continuation prompt. Exports can cover the whole canvas or selected nodes.
+- **MCP server** (`packages/mcp`): a stdio server with tools to list, read, create, and import canvases, add and update nodes, ingest sources, connect nodes, run actions, search artifacts, and export. It has no delete, posting, or payment tools.
+- **Checkpoints** (`packages/core/src/checkpoints.ts`): save a named snapshot of a canvas and compare it with the current state or another snapshot. See [docs/checkpoints.md](docs/checkpoints.md).
+- **Workflow templates** (`packages/core/src/templates.ts`): starting graphs for competitor teardown, repo and product planning, agent workflow design, and content synthesis.
+- **Website directions** (`/website/<canvas-id>`): a workbench for a source-backed website plan stored on the canvas. See [docs/website-directions.md](docs/website-directions.md).
+- **Estate views**: `/context` opens an imported Atlas entity packet read-only ([docs/atlas-context.md](docs/atlas-context.md)), and `/continuity` shows session status reported by the Starlight continuity CLI when one is available.
+- **Terminal CLI** (`scripts/canvas.mjs`): list, show, import, search, and export canvases without opening the browser. See [docs/cli.md](docs/cli.md).
+
+## Quickstart
+
+Requirements: Node.js 22.13 or newer, pnpm 11.7, and Git.
+
+```bash
+git clone https://github.com/Starlight-Intelligence/starlight-agent-canvas.git
 cd starlight-agent-canvas
 corepack enable
 corepack prepare pnpm@11.7.0 --activate
@@ -22,223 +42,40 @@ pnpm install
 pnpm dev
 ```
 
-Then open `http://localhost:3000`.
+Open `http://127.0.0.1:3000`. The first screen is the workspace. Click `Demo` to load a working example canvas, or paste a link or note into the composer and choose `Map`.
 
-Prove the full local plus MCP/Codex path:
+To check the whole local setup in one pass, run the setup script. It builds the MCP server, runs the health check and smoke tests against temporary data, seeds a sample canvas, and prints a Codex MCP config block without writing it.
 
-```powershell
-node scripts/setup.mjs
+```bash
+node scripts/setup.mjs --skip-install
+```
+
+To confirm that a production build boots and can import, map, and export, run:
+
+```bash
 pnpm install:proof
 ```
 
-`node scripts/setup.mjs` runs dependency install, MCP build, doctor, MCP smoke, Codex config smoke, seed, and Codex config dry-run. `pnpm install:proof` builds the app, starts a temporary local preview with a temporary data home, imports the bundled demo canvas, verifies context export, maps mixed source material, runs a local action, and shuts everything down.
+For a longer walkthrough, see [docs/install.md](docs/install.md) and [docs/demo-walkthrough.md](docs/demo-walkthrough.md).
 
-For the maturity contract behind the product, see `docs/capability-ladder.md`.
+## Connect an agent over MCP
 
-## Visual Tour
+Build the server, then print a config block with absolute paths for your machine:
 
-Human and agent state meet in the first viewport:
-
-![Shared context first viewport](docs/visual-qa/desktop-shared-context-first-viewport.png)
-
-Mapped sources immediately become handoff-ready graph context:
-
-![Shared context populated](docs/visual-qa/desktop-shared-context-populated.png)
-
-Setup, MCP wiring, and the Codex tool path stay visible in the product:
-
-![Setup MCP panel](docs/visual-qa/desktop-setup-mcp-panel.png)
-
-## Why It Exists
-
-Most AI canvases make research visible for a human but awkward for local agents. Starlight Agent Canvas is built as a shared context surface: you can paste/drop material visually, and Codex/Claude/Gemini can use the same canvas through safe MCP tools.
-
-## How It Works
-
-```mermaid
-flowchart LR
-  human["Human drops context"] --> map["Canvas maps typed nodes"]
-  map --> artifacts["Local artifacts + chunks"]
-  artifacts --> enrich["Attach transcript / OCR / notes"]
-  enrich --> actions["Brief / Claims / Ask / Matrix"]
-  actions --> outputs["Inspectable output nodes"]
-  outputs --> mcp["MCP export for Codex / Claude / Gemini"]
-```
-
-The web app and MCP server operate over the same local data home. A source added by you in the canvas is visible to an agent through MCP; a node added by Codex appears back in the same graph.
-
-The app now exposes this as a live `Shared context contract`: what you populated, what the canvas normalized, how many safe MCP tools Codex can use, and what will be exported for handoff. See `docs/interaction-model.md` for the exact browser, CLI, and MCP loop.
-
-## What You Can Drop
-
-| Input | v0.1 behavior | Notes |
-| --- | --- | --- |
-| YouTube URL | Title/captions when available, manual transcript fallback, `source_youtube` node, chunks, citations | Transcript-first; no video download |
-| Loom/Vimeo/Wistia/TikTok/Drive/Dropbox/direct video URL | Safe `source_video` node plus attached notes, `video` artifact, provenance metadata, chunks | Use notes/transcripts for analysis until provider transcript adapters land |
-| Image URL or PNG/JPEG/WebP/GIF/AVIF upload | Safe `source_image` node plus image preview, `image` artifact, provenance metadata, chunks | Add notes/OCR text for analysis until provider vision adapters land |
-| Public web URL | Bounded fetch into a URL artifact, or safe reference fallback | Private/localhost targets blocked by default |
-| PDF upload | Local text extraction into a PDF artifact | File size capped |
-| Markdown/text/JSON/CSV/log | Local source artifact with chunks | Works without model keys |
-| Human note | Editable graph node and source context | First-class, not just annotation |
-
-## First Ten Minutes
-
-1. Run `node scripts/setup.mjs`.
-2. Run `pnpm dev`.
-3. Open `http://localhost:3000`.
-4. Confirm the in-app `Setup / MCP` panel.
-5. Click `New` for a fresh blank graph, `Demo` for a working proof canvas, or `Video`, `Image`, `Web`, `Note`, or `Ask` to start from your own material.
-6. Use the live `Capture -> Map -> Inspect -> Ask -> Handoff` loop in the first viewport to see what is ready and trigger the next move.
-7. Paste/drop context, confirm the `Map preview` node/artifact/readiness plan, then choose `Map + Brief`, `Claims`, `Ask`, or `Map only`.
-8. Inspect the selected source receipt: kind, ingest method, chunks, URL/file, chars. If it is reference-only, the Action Drawer `Context gaps` lane points at the source; use `Attach context` to add transcript, OCR, visual notes, claims, or excerpts; chunks and readiness update immediately.
-9. Click `Context` for a general agent packet, click `Codex` for a ready-to-paste Codex continuation prompt, or use MCP `export_canvas` with `format: "codex"` when Codex should resume through MCP. These packets include an intake trace manifest, and when nodes are selected the manifest is recomputed so unrelated canvas material stays out.
-
-For the maintained first-success contract, run `pnpm first-success` or `pnpm first-success:json`.
-For the human plus Codex shared-state contract, see `docs/interaction-model.md`.
-For the full human plus agent operating loop, see `docs/operator-loop.md`.
-For the install-to-Codex first success path, see `docs/activation.md`.
-
-## What v0.1 Does
-
-- Create local canvases with portable JSON import/export, Markdown handoff exports, agent context packets, and Codex-ready continuation prompts.
-- Drop or paste URLs, YouTube links, image URLs/screenshots, transcripts, PDFs, text/Markdown/JSON/CSV files, and raw notes.
-- Use the canvas itself as the intake surface: paste into the top composer, type into the desktop empty-canvas capture box, click `Paste & Map` to turn the clipboard into nodes immediately, paste anywhere on the canvas, drop files/links, or double-click blank space for a note.
-- Keep mixed media context together: when a paste contains YouTube/video/image URLs followed by labeled transcript, notes, timestamps, OCR, alt text, or visual observations, those details attach to the matching source instead of becoming duplicate loose notes.
-- Preview the map before committing: pasted YouTube/video/image/web/text shows the future node kind, artifact kind, readiness state, and whether the selected action will create an output node.
-- Confirm every paste/drop/upload mapping with the latest intake receipt: created node kinds, artifact kinds, optional action output, and exact `Context` / `Codex` copy actions for the newly mapped material.
-- Persist every paste/drop/upload mapping as an intake trace on the canvas: detected input kinds, source URLs, created node ids, artifact ids, readiness labels, optional run/output id, and scoped `Inspect`, `Context`, and `Codex` actions remain visible after refresh, through MCP `get_canvas`, and inside Context/Codex exports.
-- Inspect source readiness on every selected source: `Codex-ready transcript`, `Codex-ready video notes`, `Codex-ready visual notes`, `Codex-ready PDF`, `URL reference saved`, or `Needs visual text`, with usable chars, chunks, ingest mode, and the next best action.
-- See context gaps without hunting through nodes: the Action Drawer lists reference-only or needs-context sources and jumps straight to the `Attach context` panel.
-- Attach context to an existing source from the inspector: paste transcript, timestamps, OCR, visual notes, claims, or excerpts into `Attach context` and the linked artifact chunks, source readiness, search, Ask, exports, and intake trace all update together.
-- Follow a live operator loop in the first viewport: `Capture`, `Map`, `Inspect`, `Ask`, and `Handoff` update from actual canvas state and expose direct actions.
-- Inspect the `Shared context contract` in the first viewport to see the current human input state, normalized artifacts, Codex/MCP path, and export scope before leaving the browser.
-- Create a fresh blank canvas from the first viewport, and click an empty primary intake action to focus the composer instead of hitting a dead disabled state.
-- Launch guided workflow templates with source slots, ordered stages, prompt nodes, expected output targets, and Codex/MCP handoff nodes; use the live Workflow Map to jump between stages.
-- Preview detected intake types before mapping, including video source, image source, web source, source notes, text source, PDF, and file paths; active text input also shows the concrete node/artifact/readiness plan.
-- Treat non-YouTube video links as first-class `source_video` nodes with attached notes, `video` artifacts, chunks, and preserved `media: video_reference` provenance.
-- Treat image URLs and uploaded screenshots as first-class `source_image` nodes with image previews, `image` artifacts, chunks, and preserved `imageUrl` or `imageDataUrl` provenance.
-- Choose the first pass before capture: `Map + Brief` by default, or `Claims`, `Ask`, and `Map only` when you want raw source nodes first.
-- Store ingested sources as durable artifacts plus typed canvas nodes with provenance metadata, source chunks, and citation-ready ids.
-- Ingest public URL text with bounded fetches; use Firecrawl only when explicitly requested.
-- Ingest YouTube links with title lookup, best-effort public captions, and manual transcript fallback.
-- Run local actions from intake, selected sources, selected nodes, or the whole canvas: summarize, extract claims, compare sources, make a decision matrix, generate an implementation brief, and ask source-grounded questions with citation metadata.
-- Click answer citations or run-log citation chips to refocus the cited source node and highlighted chunk.
-- Drag nodes, persist positions, connect nodes directly, edit selected node titles/bodies, inspect a selected source receipt with ingest mode/chunks/provenance, run source-scoped actions, copy selected source context, export selected or whole-canvas context/Codex handoff packets, export the result, and re-import portable canvas JSON.
-- Inspect local setup, data home, MCP build, and Codex MCP wiring from the in-app `Setup / MCP` panel.
-- Inspect the in-app Agent toolbelt for the Codex MCP path: `get_latest_canvas`, `ingest_anything`, `enrich_source_node`, `run_node_action`, and `export_canvas`, plus copy adoption report and terminal Codex handoff commands.
-- Auto-select and open newly created sources, notes, files, and action answers in the inspector so the captured context is immediately usable.
-- Expose safe stdio MCP tools so coding agents can get the latest canvas with source-readiness facts and persistent intake traces, ingest mixed pasted context with one `ingest_anything` call, ingest positioned text/URL/YouTube/video/image/PDF sources, enrich existing source nodes with transcript/OCR/notes, update nodes, run actions, import portable context, search artifacts, and export canvas state.
-- Keep runtime data outside the repo by default.
-
-## Quick Start
-
-From a GitHub clone:
-
-```powershell
-git clone https://github.com/frankxai/starlight-agent-canvas.git
-cd starlight-agent-canvas
-corepack enable
-corepack prepare pnpm@11.7.0 --activate
-node scripts/setup.mjs
-pnpm dev
-```
-
-For a cautious first run that skips dependency install because you already ran it:
-
-```powershell
-pnpm install
-node scripts/setup.mjs --skip-install
-pnpm dev
-```
-
-`node scripts/setup.mjs` runs the local Starlight security scan preflight when available, dependency install, MCP build, doctor, MCP smoke, Codex config smoke, Starlight OS canvas seed, and a dry-run Codex MCP config print. Use `node scripts/setup.mjs --codex-write` when you want it to update `~/.codex/config.toml` with a timestamped backup. Use `--skip-security-scan` only when you intentionally want to bypass the local estate preflight; public clones without the Starlight security repo skip it automatically.
-
-`pnpm doctor` now verifies local prerequisites, workspace files, the built MCP server, `.mcp.json`, and whether Codex is wired to this exact MCP CLI path and `AGENT_CANVAS_HOME`. It also warns when `.mcp.json` points at a different data home than the active app/Codex home so local state does not split across two canvases.
-`pnpm mcp:codex:smoke` proves the Codex installer path without mutating your real Codex config: it writes a temporary `config.toml`, runs `doctor --config`, launches the configured MCP server from outside the repo, calls `tools/list` and `list_canvases`, then removes the temp files.
-`pnpm first-success` prints the maintained human plus Codex activation contract; `pnpm first-success:json` emits the same contract for agents, setup helpers, issue triage, and CI.
-`pnpm install:proof` is the memorable alias for `pnpm first-run:check`: it proves production boot, demo import, context export, mixed-source intake, local action output, and clean preview shutdown.
-`pnpm adoption:report` turns doctor, release audit, demo proof, visual evidence, GitHub metadata, and Codex MCP status into one human-readable adoption snapshot; `pnpm adoption:report:json` emits the same contract for agents and CI.
-
-Manual setup remains available:
-
-```powershell
-pnpm install
-pnpm doctor
+```bash
 pnpm mcp:build
-pnpm mcp:smoke
-pnpm mcp:codex:smoke
-pnpm canvas:smoke
-pnpm seed:starlight
-pnpm dev
-```
-
-From Frank's local estate:
-
-```powershell
-cd C:\Users\frank\starlight\repos\starlight-agent-canvas
-pnpm setup:local -- --skip-install --codex-write
-pnpm dev
-```
-
-The web app starts at `http://localhost:3000` unless Next.js chooses another port.
-API routes are localhost-only unless `AGENT_CANVAS_ALLOW_REMOTE=1` is set intentionally.
-
-Try the portable demo:
-
-```text
-Open the app -> Demo -> inspect the selected YouTube source receipt -> click Context.
-```
-
-Manual portable import is still available from `Import -> examples/demo-canvas.json`.
-
-The demo proves YouTube/manual transcript context, URL notes, human notes, source artifacts, chunk ids, Map + Brief output, and Codex context handoff. See `docs/demo-walkthrough.md`.
-
-Optional local data path:
-
-```powershell
-$env:AGENT_CANVAS_HOME="C:\Users\frank\.starlight\agent-canvas"
-```
-
-Seed or refresh the Starlight operating canvas:
-
-```powershell
-pnpm seed:starlight
-```
-
-Run a production local preview:
-
-```powershell
-pnpm preview:prod
-```
-
-The production preview uses `http://127.0.0.1:3101`.
-
-## MCP
-
-```powershell
-pnpm mcp:build
-pnpm mcp:config -- --client codex
 pnpm mcp:config -- --client json
-pnpm mcp:install:codex
-pnpm mcp:install:codex -- --write
-pnpm mcp:smoke
-pnpm mcp:codex:smoke
+pnpm mcp:config -- --client codex
 ```
 
-New Codex entries default to `enabled = false`; the installer preserves existing activation, tool controls and data home. Launch only the selected task with `codex -c mcp_servers.starlight-agent-canvas.enabled=true`, then verify discovery and calls. Config/transport smoke alone does not prove native activation.
-
-`pnpm mcp:start` is only for manual stdio debugging. Normal MCP clients spawn the server from the generated config. For Codex-specific operating guidance, see `docs/codex-integration.md`.
-
-Example MCP client entry:
+The JSON form looks like this:
 
 ```json
 {
   "mcpServers": {
     "starlight-agent-canvas": {
       "command": "node",
-      "args": [
-        "/absolute/path/to/starlight-agent-canvas/packages/mcp/dist/cli.js"
-      ],
+      "args": ["/absolute/path/to/starlight-agent-canvas/packages/mcp/dist/cli.js"],
       "env": {
         "AGENT_CANVAS_HOME": "/absolute/path/to/.starlight/agent-canvas"
       }
@@ -247,113 +84,106 @@ Example MCP client entry:
 }
 ```
 
-Run `pnpm mcp:config -- --client json` to print this block with paths for your machine.
+For Codex, `pnpm mcp:install:codex` previews the change to `~/.codex/config.toml`, and `pnpm mcp:install:codex -- --write` applies it with a backup. New entries are written with `enabled = false`, so you turn the server on per task. Details are in [docs/codex-integration.md](docs/codex-integration.md).
 
-## Local CLI
-
-```powershell
-pnpm canvas -- list
-pnpm canvas -- demo
-pnpm canvas -- export latest --format context --out .agent-canvas/demo-context.md
-pnpm canvas -- export latest --format codex --out .agent-canvas/demo-codex.md
-pnpm canvas -- export latest --format codex --nodes source-youtube-nodeflow --out .agent-canvas/demo-selected-codex.md
-pnpm canvas -- search "Codex context handoff"
-pnpm canvas:smoke
-```
-
-The CLI uses the same local data home as the web app and MCP server. It gives terminal users a safe way to import the demo, list local canvases, export JSON/Markdown/context/Codex handoff for the full canvas or selected node ids, and search artifacts without opening the browser. See `docs/cli.md`.
-
-For MCP agents, the shortest equivalent to the human paste-anything path is:
+A short agent session usually calls these tools in order:
 
 ```text
 get_latest_canvas
-ingest_anything(content: "<YouTube/video/image/URL/text plus notes>", runAction: "summarize")
-enrich_source_node(nodeId: "<reference-only source>", body: "<transcript/OCR/notes>", enrichmentKind: "transcript")
+ingest_anything(content: "<links, text, and notes>", runAction: "summarize")
+enrich_source_node(nodeId: "<source node>", body: "<transcript or notes>", enrichmentKind: "transcript")
 export_canvas(format: "codex")
 ```
 
-`ingest_anything` uses the same grouping rules as the web composer, so nearby source-specific transcript/notes/OCR blocks stay attached to their YouTube, video, or image source for later Codex context. Use `enrich_source_node` later when the first paste only had a link and the transcript, OCR, excerpts, claims, or notes arrive afterward.
+Client examples for Codex, Claude Desktop, and Gemini are in [examples/mcp](examples/mcp/README.md). The full tool list and operating notes are in [docs/mcp-setup.md](docs/mcp-setup.md).
 
-## Verify
+## Use the terminal CLI
 
-```powershell
-pnpm doctor
-pnpm doctor:json
-pnpm first-success
-pnpm first-success:json
-pnpm adoption:report
-pnpm adoption:report:json
-pnpm release:audit
-pnpm verify
-pnpm install:proof
-pnpm canvas:smoke
-pnpm mcp:smoke
-pnpm mcp:codex:smoke
-pnpm test:e2e
+```bash
+pnpm canvas -- demo
+pnpm canvas -- list
+pnpm canvas -- show latest
+pnpm canvas -- search "Codex context handoff"
+pnpm canvas -- export latest --format context --out .agent-canvas/demo-context.md
+pnpm canvas -- export latest --format codex --out .agent-canvas/demo-codex.md
 ```
 
-`pnpm first-success` is the explicit install-to-Codex success contract. `pnpm adoption:report` is the single adoption snapshot for humans and agents. It reads doctor JSON, first-success JSON, release audit JSON, demo canvas proof, visual evidence, Git/GitHub status, and Codex MCP path/home without mutating local data. `pnpm release:audit` checks GitHub/OSS files, install docs, required scripts, CI gates, first-success shape, demo canvas proof, visual evidence, env hygiene, and runtime-data safety. `pnpm verify` runs typecheck, unit/MCP tests, and production build. `pnpm doctor` verifies install and Codex wiring health; `pnpm doctor:json` emits the same health contract for agents, CI, and setup automation. `pnpm install:proof` builds the production app, uses a temporary data home, starts a local preview, verifies setup status, imports the demo canvas, checks context export, proves mixed YouTube/video/image/web/text intake through `/api/canvases/:id/ingest/anything`, runs a local action, and shuts the preview down. `pnpm canvas:smoke` proves terminal demo import, list, search, context export, and Codex handoff export. `pnpm mcp:smoke` proves stdio source ingest, node update, action, import, and JSON/Markdown/context/Codex export against a local throwaway data home. `pnpm mcp:codex:smoke` proves the generated Codex MCP config path with a temporary config and temporary `AGENT_CANVAS_HOME`, then launches that configured server and calls safe MCP tools. `pnpm test:e2e` runs the desktop/mobile Playwright workflow.
+The CLI, the web app, and the MCP server read and write the same data home, so a canvas imported in one shows up in the others.
 
-## Technology
+## Supported inputs
 
-- Next.js App Router, React, TypeScript, Tailwind.
-- `@xyflow/react` typed workflow canvas.
-- Zod schemas, chunked source artifacts, citations, context packets, Codex handoff prompts, and a local file-backed store in `packages/core`.
-- Source adapters for URL fetch, optional Firecrawl, image upload/reference artifacts, PDF extraction, YouTube oEmbed/captions, and manual text.
-- `@modelcontextprotocol/sdk` stdio server in `packages/mcp`.
-- Vercel AI SDK dependency for future provider adapters; v0.1 actions remain deterministic and keyless.
-- Vitest, Playwright, security scan, CI, and visual QA evidence.
+| Input | What the canvas stores |
+| --- | --- |
+| YouTube URL | `source_youtube` node with title and public captions when available, or a transcript you paste. No video is downloaded. |
+| Other video URL (Loom, Vimeo, Wistia, TikTok, Drive, Dropbox, direct links) | `source_video` node kept as a reference. Attach a transcript or notes to make it usable in actions. |
+| Image URL or PNG, JPEG, WebP, GIF, AVIF upload | `source_image` node with a preview. Attach OCR text or visual notes for analysis. |
+| Public web URL | `source_url` node with fetched readable text, or a saved reference if the fetch fails. |
+| PDF upload | `source_pdf` node with text extracted locally. |
+| Text, Markdown, JSON, CSV, log | Source artifact with chunks. |
+| Note | Editable `note` node that counts as context. |
 
-See `docs/technology-stack.md`, `docs/mcp-setup.md`, and `docs/production-readiness.md`.
+## Architecture
 
-Client examples and workflow prompts live in `examples/mcp`.
+```mermaid
+flowchart LR
+  web["apps/web<br/>Next.js UI and API routes"] --> core["packages/core"]
+  mcp["packages/mcp<br/>stdio MCP server"] --> core
+  cli["scripts/canvas.mjs<br/>terminal CLI"] --> core
+  core --> ingest["Ingestion adapters"]
+  core --> actions["Local action runner"]
+  core --> store["File-backed store"]
+  store --> home["AGENT_CANVAS_HOME"]
+```
 
-## Current Proof
+`packages/core` holds the Zod schemas, the file store, ingestion, actions, checkpoints, and exporters, and has no React or Next.js dependency. The web app, the MCP server, and the CLI are three entry points over that one package and one data directory. Writes are serialized per canvas and go through a temp file and rename.
 
-- Last local verification date: `2026-07-03`.
-- Latest committed product slice: use `git log --oneline -1`.
-- Visual QA score: `28/30` in `docs/design-loop-evidence.json`.
-- Adoption snapshot: `pnpm adoption:report`.
-- Evidence matrix: `docs/readiness-evidence.md`.
-- Real UI captures: `docs/visual-qa/desktop-self-serve-video-intake.png`, `docs/visual-qa/desktop-self-serve-video-mapped.png`, `docs/visual-qa/mobile-self-serve-note-intake.png`.
+Each canvas record holds metadata, typed nodes, typed edges, action runs, and source artifacts. More detail is in [docs/system-design.md](docs/system-design.md) and [docs/technology-stack.md](docs/technology-stack.md).
 
-## Docs
+## Configuration
 
-- Install and first run: `docs/install.md`
-- Activation runway: `docs/activation.md`
-- First success contract: `docs/first-success.md`
-- First success machine contract: `docs/first-success.contract.json`
-- Adoption report: `docs/adoption-report.md`
-- Human-agent interaction model: `docs/interaction-model.md`
-- Human/agent operator loop: `docs/operator-loop.md`
-- PRD: `docs/prd.md`
-- User flows: `docs/user-flows.md`
-- Codex integration: `docs/codex-integration.md`
-- Demo walkthrough: `docs/demo-walkthrough.md`
-- Capability ladder: `docs/capability-ladder.md`
-- Local CLI: `docs/cli.md`
-- Release audit: `docs/release-audit.md`
-- MCP setup: `docs/mcp-setup.md`
-- System design: `docs/system-design.md`
-- Technology stack: `docs/technology-stack.md`
-- GitHub readiness: `docs/github-readiness.md`
-- Readiness evidence: `docs/readiness-evidence.md`
-- Production readiness: `docs/production-readiness.md`
-- Support: `SUPPORT.md`
-- Security: `SECURITY.md`
-- Governance: `GOVERNANCE.md`
-- Code of conduct: `CODE_OF_CONDUCT.md`
+Configuration is done with environment variables. All of them are optional, and `.env.example` lists the names.
 
-## Repo Layout
+| Variable | Purpose |
+| --- | --- |
+| `AGENT_CANVAS_HOME` | Directory for canvases, artifacts, and checkpoints. Defaults to `<home>/.starlight/agent-canvas`, outside the repository. |
+| `AGENT_CANVAS_ALLOW_REMOTE` | Set to `1` to let the web API answer requests from hosts other than localhost. Leave unset unless the deployment is protected. |
+| `FIRECRAWL_API_KEY` | Used for URL ingestion only when a request explicitly opts into Firecrawl. |
 
-- `apps/web`: Next.js workspace UI.
-- `packages/core`: schemas, file store, ingestion, actions, import/export, and agent context packet generation.
-- `packages/mcp`: safe stdio MCP server.
-- `docs`: product brief, architecture, scene brief, evidence.
-- `examples`: portable sample canvases.
+The dev and production servers bind to `127.0.0.1`. URL ingestion rejects localhost and private network targets and applies timeout and size limits. See [SECURITY.md](SECURITY.md) for the full boundary.
 
-## Safety
+## Project layout
 
-No v0.1 tool posts externally, scrapes social platforms, spends money, modifies external accounts, or deletes canvases. Runtime state lives in local files and can be inspected directly.
+```text
+apps/web          Next.js workspace UI, API routes, Playwright tests
+packages/core     Schemas, file store, ingestion, actions, checkpoints, exporters
+packages/mcp      Stdio MCP server and tool handlers
+scripts           Setup, doctor, smoke tests, terminal CLI, release audit
+examples          Demo canvas and MCP client config examples
+docs              Install guide, system design, product docs, visual QA captures
+```
 
-URL/PDF/video/image ingestion is bounded: private and localhost URLs are rejected for arbitrary URL fetches, remote fetches have timeout/size limits, PDFs and uploaded images are capped, image URLs are stored as references without fetching arbitrary binary content, YouTube transcript fetching is read-only/best-effort, and Firecrawl is used only when both `FIRECRAWL_API_KEY` exists and a request explicitly opts in.
+## Development
+
+```bash
+pnpm doctor        # check prerequisites, workspace files, and MCP wiring
+pnpm typecheck
+pnpm test          # unit tests for core and mcp
+pnpm build
+pnpm verify        # typecheck, test, and build in one command
+pnpm mcp:smoke     # exercise the MCP server over stdio with throwaway data
+pnpm canvas:smoke  # exercise the terminal CLI with throwaway data
+pnpm release:audit # check repository files, CI gates, and runtime-data hygiene
+pnpm test:e2e      # Playwright desktop and mobile runs
+```
+
+`pnpm test:e2e` needs Playwright's Chromium. Install it with `pnpm --filter @starlight-agent-canvas/web exec playwright install --with-deps chromium`.
+
+## Contributing
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. It covers the local gates to run and the boundaries a change has to respect: runtime data stays out of Git, and MCP tools stay explicit and non-destructive. [AGENTS.md](AGENTS.md) carries the same rules for coding agents.
+
+For help and reports, see [SUPPORT.md](SUPPORT.md). Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md). Project roles are in [GOVERNANCE.md](GOVERNANCE.md) and [MAINTAINERS.md](MAINTAINERS.md), and conduct expectations are in [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+
+## License
+
+MIT. See [LICENSE](LICENSE).
