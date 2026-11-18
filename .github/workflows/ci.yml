@@ -5,6 +5,11 @@ on:
   push:
     branches: [main]
 
+# Keep only the current revision of each PR. Every main push keeps its own run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   portable-mcp:
     runs-on: ${{ matrix.os }}
