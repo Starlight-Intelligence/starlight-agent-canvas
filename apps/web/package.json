@@ -8,10 +8,13 @@
     "build": "next build && node ../../scripts/restore-next-env.mjs",
     "start": "next start --hostname 127.0.0.1",
     "typecheck": "tsc --noEmit",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test": "vitest run --dir lib",
+    "world:generate": "node scripts/generate-world.mjs"
   },
   "dependencies": {
     "@starlight-agent-canvas/core": "workspace:*",
+    "@starlight-agent-canvas/world": "workspace:*",
     "@xyflow/react": "^12.12.1",
     "ai": "^7.0.164",
     "lucide-react": "^1.70.0",

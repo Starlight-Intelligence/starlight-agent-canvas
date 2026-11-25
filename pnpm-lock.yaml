@@ -39,6 +39,9 @@ importers:
       '@starlight-agent-canvas/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@starlight-agent-canvas/world':
+        specifier: workspace:*
+        version: link:../../packages/world
       '@xyflow/react':
         specifier: ^12.12.1
         version: 12.12.1(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)

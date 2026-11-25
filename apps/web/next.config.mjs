@@ -1,6 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  transpilePackages: ['@starlight-agent-canvas/core'],
+  transpilePackages: ['@starlight-agent-canvas/core', '@starlight-agent-canvas/world'],
   allowedDevOrigins: ['127.0.0.1'],
 };
 
