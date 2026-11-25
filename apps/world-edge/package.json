@@ -1,0 +1,27 @@
+{
+  "name": "@starlight-agent-canvas/world-edge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Cloudflare Worker for the World Canvas: one Durable Object per world, MCP tools, D1/R2/Vectorize bindings.",
+  "scripts": {
+    "dev": "wrangler dev",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "dry-run": "wrangler deploy --dry-run --outdir dist"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/server": "2.4.0",
+    "@starlight-agent-canvas/world": "workspace:*",
+    "agents": "0.34.0",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "1.7.0",
+    "@cloudflare/workers-types": "5.20261110.1",
+    "typescript": "^7.0.2",
+    "vitest": "5.1.0",
+    "wrangler": "4.160.0"
+  },
+  "license": "MIT"
+}
