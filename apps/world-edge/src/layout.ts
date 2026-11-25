@@ -18,7 +18,8 @@ function round(n: number): number {
 }
 
 /**
- * Deterministic layouts inside a region's bounds. Output is a list of moves
+ * Deterministic layouts inside a region's bounds. Every position lands
+ * inside the bounds, so get_region(regionId) still returns every laid-out node. Output is a list of moves
  * with the node's current version as baseVersion, ready for a moveNodes op.
  * Nodes that would not move are left out.
  */
@@ -45,11 +46,34 @@ export function layoutNodes(
   return moves;
 }
 
+/** Inner box with padding that still leaves room when the region is small. */
+function innerBox(bounds: Bounds): { x: number; y: number; w: number; h: number } {
+  const pad = Math.min(PAD, bounds.w / 4, bounds.h / 4);
+  return { x: bounds.x + pad, y: bounds.y + pad, w: Math.max(0, bounds.w - 2 * pad), h: Math.max(0, bounds.h - 2 * pad) };
+}
+
+/**
+ * Step between cells: the preferred spacing, shrunk so `count` cells span at
+ * most `span`. Positions are top-left corners, so the last cell starts at
+ * (count - 1) * step, which stays inside the box.
+ */
+function step(preferred: number, span: number, count: number): number {
+  return count <= 1 ? 0 : Math.min(preferred, span / (count - 1));
+}
+
+/** Grid sized to the region's aspect ratio; every position stays inside the bounds. */
 function grid(nodes: readonly WorldNode[], bounds: Bounds): Map<string, { x: number; y: number }> {
-  const cols = Math.max(1, Math.floor((bounds.w - PAD) / CELL_W));
+  const box = innerBox(bounds);
+  const n = nodes.length;
+  const fitCols = Math.max(1, Math.floor(box.w / CELL_W) + 1);
+  const aspectCols = Math.max(1, Math.ceil(Math.sqrt((n * Math.max(box.w, 1)) / Math.max(box.h, 1) * (CELL_H / CELL_W))));
+  const cols = Math.min(n, Math.max(fitCols, aspectCols));
+  const rows = Math.ceil(n / cols);
+  const dx = step(CELL_W, box.w, cols);
+  const dy = step(CELL_H, box.h, rows);
   const out = new Map<string, { x: number; y: number }>();
   nodes.forEach((node, i) => {
-    out.set(node.id, { x: bounds.x + PAD + (i % cols) * CELL_W, y: bounds.y + PAD + Math.floor(i / cols) * CELL_H });
+    out.set(node.id, { x: box.x + (i % cols) * dx, y: box.y + Math.floor(i / cols) * dy });
   });
   return out;
 }
@@ -71,13 +95,21 @@ function layered(nodes: readonly WorldNode[], edges: readonly WorldEdge[], bound
     }
     if (!changed) break;
   }
+  const rowOf = new Map<string, number>();
   const rows = new Map<number, number>();
-  const out = new Map<string, { x: number; y: number }>();
   for (const node of nodes) {
     const l = layer.get(node.id)!;
     const r = rows.get(l) ?? 0;
     rows.set(l, r + 1);
-    out.set(node.id, { x: bounds.x + PAD + l * CELL_W, y: bounds.y + PAD + r * CELL_H });
+    rowOf.set(node.id, r);
+  }
+  // Fit columns (layers) and rows into the region instead of overflowing it.
+  const box = innerBox(bounds);
+  const dx = step(CELL_W, box.w, Math.max(...layer.values()) + 1);
+  const dy = step(CELL_H, box.h, Math.max(...rows.values()));
+  const out = new Map<string, { x: number; y: number }>();
+  for (const node of nodes) {
+    out.set(node.id, { x: box.x + layer.get(node.id)! * dx, y: box.y + rowOf.get(node.id)! * dy });
   }
   return out;
 }
@@ -88,6 +120,7 @@ function layered(nodes: readonly WorldNode[], edges: readonly WorldEdge[], bound
  */
 function force(nodes: readonly WorldNode[], edges: readonly WorldEdge[], bounds: Bounds): Map<string, { x: number; y: number }> {
   const pos = grid(nodes, bounds);
+  const box = innerBox(bounds);
   const ids = nodes.map((n) => n.id);
   const index = new Map(ids.map((id, i) => [id, i]));
   const xs = ids.map((id) => pos.get(id)!.x);
@@ -123,8 +156,8 @@ function force(nodes: readonly WorldNode[], edges: readonly WorldEdge[], bounds:
     }
     for (let i = 0; i < ids.length; i++) {
       const len = Math.max(0.01, Math.hypot(dx[i]!, dy[i]!));
-      xs[i] = Math.min(bounds.x + bounds.w - PAD, Math.max(bounds.x + PAD, xs[i]! + (dx[i]! / len) * Math.min(len, temperature)));
-      ys[i] = Math.min(bounds.y + bounds.h - PAD, Math.max(bounds.y + PAD, ys[i]! + (dy[i]! / len) * Math.min(len, temperature)));
+      xs[i] = Math.min(box.x + box.w, Math.max(box.x, xs[i]! + (dx[i]! / len) * Math.min(len, temperature)));
+      ys[i] = Math.min(box.y + box.h, Math.max(box.y, ys[i]! + (dy[i]! / len) * Math.min(len, temperature)));
     }
     temperature *= 0.92;
   }

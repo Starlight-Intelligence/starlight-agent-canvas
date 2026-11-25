@@ -136,7 +136,7 @@ export async function searchWorld(
 ): Promise<{ mode: SearchMode; hits: SearchHit[] }> {
   const agent = await getAgentByName(env.WorldAgent, worldId);
   try {
-    const semantic = await semanticSearch(env, worldId, query, limit * 2);
+    const semantic = await semanticSearch(env, worldId, query, limit * 2, kinds);
     if (semantic) {
       const nodes = (await agent.getNodesById(semantic.map((m) => m.nodeId))) as WorldNode[];
       const byId = new Map(nodes.map((n) => [n.id, n]));

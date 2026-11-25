@@ -137,6 +137,11 @@ export class WorldAgent extends Agent<Env, WorldSummaryState> {
   };
 
   #store: WorldStore | null = null;
+  /**
+   * Index sync jobs run one after another, in commit order. Without this a
+   * slow job for an older batch could overwrite rows a newer batch wrote.
+   */
+  #indexQueue: Promise<void> = Promise.resolve();
 
   private get store(): WorldStore {
     if (!this.#store) {
@@ -188,7 +193,7 @@ export class WorldAgent extends Agent<Env, WorldSummaryState> {
         level,
         bounds,
         regions: world.regions,
-        clusters: summarizeClusters(store.tileCounts(tiles, regionFilter)),
+        clusters: summarizeClusters(store.tileCounts(tiles, { regionId: regionFilter, kinds: query.kinds })),
         nodes: [],
         edges: [],
         truncated: false,
@@ -284,7 +289,7 @@ export class WorldAgent extends Agent<Env, WorldSummaryState> {
       return { ok: false, version: store.getWorld().version, error: { code: 'INVALID_OP', message: `Unknown layout strategy ${String(strategy)}.` } };
     }
     const nodes = store.nodeIdsInRegion(region.id, 1000);
-    const edges = store.edgesTouching(nodes.map((n) => n.id));
+    const edges = store.edgesTouching(nodes.map((n) => n.id), 50_000);
     const moves = layoutNodes(nodes, edges, region.bounds, strategy);
     if (moves.length === 0) {
       return { ok: true, version: store.getWorld().version, seq: 0, nodes: [], edges: [], removedNodes: [], removedEdges: [], proposals: [], moved: 0 };
@@ -401,11 +406,11 @@ export class WorldAgent extends Agent<Env, WorldSummaryState> {
       edgeCount: counts.edges,
       lastChange: { seq: changes.seq, harness: actor.harness, actor: actor.actor ?? null, at: actor.at },
     });
-    this.ctx.waitUntil(
-      syncIndex(this.env, world, counts.nodes, changes.nodes, changes.removedNodes).catch((error: unknown) => {
-        console.error('world-edge: index sync failed', { worldId: this.name, version: changes.version, error: String(error) });
-      }),
-    );
+    const job = this.#indexQueue.then(() => syncIndex(this.env, world, counts.nodes, changes.nodes, changes.removedNodes)).catch((error: unknown) => {
+      console.error('world-edge: index sync failed', { worldId: this.name, version: changes.version, error: String(error) });
+    });
+    this.#indexQueue = job;
+    this.ctx.waitUntil(job);
   }
 
   // ------------------------------------------------- state sync guards ----

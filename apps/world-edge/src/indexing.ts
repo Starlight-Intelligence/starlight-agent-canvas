@@ -59,7 +59,8 @@ export async function syncIndex(
       db.prepare(
         `INSERT INTO worlds (id, title, summary, version, node_count, updated_at) VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET title = excluded.title, summary = excluded.summary, version = excluded.version,
-           node_count = excluded.node_count, updated_at = excluded.updated_at`,
+           node_count = excluded.node_count, updated_at = excluded.updated_at
+         WHERE excluded.version >= worlds.version`,
       ).bind(world.id, world.title, world.summary, world.version, nodeCount, world.updatedAt),
     ];
     for (const node of nodes) {
@@ -68,7 +69,8 @@ export async function syncIndex(
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(world_id, node_id) DO UPDATE SET tile_key = excluded.tile_key, region_id = excluded.region_id,
            kind = excluded.kind, title = excluded.title, summary = excluded.summary, canon_status = excluded.canon_status,
-           version = excluded.version, x = excluded.x, y = excluded.y, w = excluded.w, h = excluded.h, updated_at = excluded.updated_at`,
+           version = excluded.version, x = excluded.x, y = excluded.y, w = excluded.w, h = excluded.h, updated_at = excluded.updated_at
+         WHERE excluded.version >= world_nodes.version`,
       ).bind(
         world.id, node.id, tileKey(node.position), node.regionId, node.kind, node.title, node.summary, node.canon.status,
         node.version, node.position.x, node.position.y, node.size?.w ?? 1, node.size?.h ?? 1, node.updatedAt,
@@ -112,12 +114,20 @@ export async function semanticSearch(
   worldId: string,
   query: string,
   topK: number,
+  kinds?: readonly string[],
 ): Promise<{ nodeId: string; score: number }[] | null> {
   if (!env.WORLD_VECTORS || !env.AI) return null;
   const embedded = (await env.AI.run(EMBEDDING_MODEL, { text: [query] })) as { data?: number[][] };
   const vector = embedded.data?.[0];
   if (!vector) return null;
-  const result = await env.WORLD_VECTORS.query(vector, { topK: Math.min(topK, 50), namespace: worldId, returnMetadata: 'all' });
+  // Filter by kind inside Vectorize (needs the metadata index on `kind`, see
+  // README) so a kind-restricted search still gets topK matching candidates.
+  const result = await env.WORLD_VECTORS.query(vector, {
+    topK: Math.min(topK, 50),
+    namespace: worldId,
+    returnMetadata: 'all',
+    ...(kinds && kinds.length > 0 ? { filter: { kind: { $in: [...kinds] } } } : {}),
+  });
   return result.matches
     .map((m) => ({ nodeId: String((m.metadata as Record<string, unknown> | undefined)?.nodeId ?? ''), score: m.score }))
     .filter((m) => m.nodeId);

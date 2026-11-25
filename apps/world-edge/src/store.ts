@@ -235,15 +235,19 @@ export class WorldStore {
       .map((r) => JSON.parse(String(r.data)) as WorldEdge);
   }
 
-  /** Edges with either endpoint in `nodeIds`. */
-  edgesTouching(nodeIds: readonly string[], limit = 50_000): WorldEdge[] {
+  /**
+   * Edges with either endpoint in `nodeIds`. Reads pass a limit; the write
+   * path (removeNode) passes none, because a partial set would leave
+   * dangling edges behind.
+   */
+  edgesTouching(nodeIds: readonly string[], limit?: number): WorldEdge[] {
     if (nodeIds.length === 0) return [];
     const ids = JSON.stringify(nodeIds);
     return this.rows(
       `SELECT data FROM edges
        WHERE from_id IN (SELECT value FROM json_each(?1)) OR to_id IN (SELECT value FROM json_each(?1))
        LIMIT ?2`,
-      ids, limit,
+      ids, limit ?? -1,
     ).map((r) => JSON.parse(String(r.data)) as WorldEdge);
   }
 
@@ -270,12 +274,17 @@ export class WorldStore {
   }
 
   /** Per-tile counts by kind, for the cluster zoom level. */
-  tileCounts(tiles: readonly string[], regionId?: string): { tile: string; kind: string; count: number; x: number; y: number }[] {
+  tileCounts(
+    tiles: readonly string[],
+    options: { regionId?: string; kinds?: readonly string[] } = {},
+  ): { tile: string; kind: string; count: number; x: number; y: number }[] {
+    const kinds = options.kinds && options.kinds.length > 0 ? JSON.stringify(options.kinds) : null;
     return this.rows(
       `SELECT tile_key, kind, COUNT(*) AS n, AVG(x) AS cx, AVG(y) AS cy FROM nodes
        WHERE tile_key IN (SELECT value FROM json_each(?1)) AND (?2 IS NULL OR region_id = ?2)
+         AND (?3 IS NULL OR kind IN (SELECT value FROM json_each(?3)))
        GROUP BY tile_key, kind`,
-      JSON.stringify(tiles), regionId ?? null,
+      JSON.stringify(tiles), options.regionId ?? null, kinds,
     ).map((r) => ({ tile: String(r.tile_key), kind: String(r.kind), count: Number(r.n), x: Number(r.cx), y: Number(r.cy) }));
   }
 
