@@ -58,6 +58,12 @@ describe('importClaudeWhiteboard (synthetic fixture)', () => {
     const stone = result.graph.nodes.find((n) => n.title === 'Stone Gate')!;
     expect(stone.summary).toBe('Weight and patience.');
     expect(stone.tags).toEqual(['gate', 'gate-01']);
+    // One "Bram × Tusk" element expands into two nodes; `part` disambiguates them.
+    const provenance = (title: string) => result.graph.nodes.find((n) => n.title === title)!.meta.import;
+    expect(provenance('Bram')).toEqual({ source: 'claude-whiteboard', elementIds: ['t5'], part: 'god' });
+    expect(provenance('Tusk')).toEqual({ source: 'claude-whiteboard', elementIds: ['t5'], part: 'godbeast' });
+    expect(provenance('House Brook')).toEqual({ source: 'claude-whiteboard', elementIds: ['t16'], part: '1' });
+    expect(provenance('Stone Gate')).toEqual({ source: 'claude-whiteboard', elementIds: ['t4', 't6'] });
   });
 
   it('expands house lists, headings, bullets and free text', () => {
