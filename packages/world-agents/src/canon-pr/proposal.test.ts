@@ -1,0 +1,332 @@
+import { describe, expect, it } from 'vitest';
+import type { WorldNode } from '@starlight-agent-canvas/world';
+import { CanonGuardError, CanonProposalError } from './errors.js';
+import { buildCanonProposal, slugify } from './proposal.js';
+import type { CanonProposalRequestInput } from './request.js';
+
+const T0 = '2026-01-01T00:00:00.000Z';
+const clock = () => new Date('2026-03-14T12:00:00.000Z');
+
+function node(id: string, overrides: Partial<WorldNode> = {}): WorldNode {
+  return {
+    id,
+    worldId: 'testland',
+    kind: 'character',
+    title: `Node ${id}`,
+    summary: `Summary of ${id}.`,
+    body: `Body of ${id}.`,
+    tags: ['alpha'],
+    canon: { status: 'draft' },
+    media: [],
+    position: { x: 0, y: 0 },
+    regionId: null,
+    layer: 0,
+    createdBy: { harness: 'claude', at: T0 },
+    updatedAt: T0,
+    version: 2,
+    meta: {},
+    ...overrides,
+  };
+}
+
+function request(overrides: Partial<CanonProposalRequestInput> = {}): CanonProposalRequestInput {
+  return {
+    worldId: 'testland',
+    title: 'The Glass Orchard',
+    nodeIds: ['n_orchard', 'n_keeper'],
+    rationale: 'The orchard and its keeper recur across three drafts.',
+    proposer: { harness: 'claude', actor: 'session-7' },
+    ...overrides,
+  };
+}
+
+const nodes = [
+  node('n_orchard', { kind: 'place', title: 'Glass Orchard', summary: 'An orchard of glass trees.', tags: ['place', 'glass'] }),
+  node('n_keeper', { title: 'Orchard Keeper', canon: { status: 'proposed' }, version: 5 }),
+  node('n_unrelated'),
+];
+
+function codeOf(fn: () => unknown): string | undefined {
+  try {
+    fn();
+  } catch (error) {
+    if (error instanceof CanonProposalError) return error.code;
+    throw error;
+  }
+  return undefined;
+}
+
+/** Headings and lines outside fenced code blocks, using CommonMark backtick fence rules. */
+function outsideFences(markdown: string): string[] {
+  const out: string[] = [];
+  let open = 0;
+  for (const line of markdown.split('\n')) {
+    const fence = /^ {0,3}(`{3,})/.exec(line);
+    if (open === 0) {
+      if (fence) open = fence[1]!.length;
+      else out.push(line);
+    } else if (fence && fence[1]!.length >= open && /^ {0,3}`+\s*$/.test(line)) {
+      open = 0;
+    }
+  }
+  return out;
+}
+
+describe('buildCanonProposal', () => {
+  it('builds path, branch, slug and date from the request and clock', () => {
+    const proposal = buildCanonProposal(request(), nodes, { now: clock });
+    expect(proposal.slug).toBe('the-glass-orchard');
+    expect(proposal.date).toBe('2026-03-14');
+    expect(proposal.path).toBe('.arcanea/lore/proposals/2026-03-14-the-glass-orchard.md');
+    expect(proposal.branch).toBe('canon/the-glass-orchard');
+    expect(proposal.prTitle).toBe('Canon proposal: The Glass Orchard');
+    expect(proposal.commitMessage.split('\n')[0]).toBe('docs(lore): add canon proposal the-glass-orchard');
+  });
+
+  it('writes the CANON_LOCKED sections in order', () => {
+    const { markdown } = buildCanonProposal(request(), nodes, { now: clock });
+    expect(markdown.split('\n')[0]).toBe('# CANON PROPOSAL - THE GLASS ORCHARD');
+    expect(markdown).toContain('> *Status: STAGING ⏳ (proposal, not canon)*');
+    expect(markdown).toContain('> *Last Updated: 2026-03-14*');
+    expect(markdown).toContain('> *Proposed By: claude (actor: session-7)*');
+    const h2 = outsideFences(markdown).filter((line) => line.startsWith('## '));
+    expect(h2).toEqual([
+      '## PURPOSE',
+      '## PROPOSED ENTRIES',
+      '## RATIONALE',
+      '## PROVENANCE',
+      '## APPROVAL LOG',
+      '## HOW TO MODIFY CANON',
+    ]);
+    const h3 = outsideFences(markdown).filter((line) => line.startsWith('### '));
+    expect(h3).toEqual(['### Glass Orchard', '### Orchard Keeper']);
+    expect(markdown).toContain('changes nothing');
+    expect(markdown).toContain('- ✅ **LOCKED** = Canon, do not modify');
+    expect(markdown).toContain('- ⏳ **STAGING** = Proposed, awaiting approval');
+    expect(markdown).toContain('- 🔧 **EVOLVING** = Approved concept, details flexible');
+    expect(markdown).toContain('| Entity | Kind | Node Id | Version | Summary |');
+    expect(markdown).toContain('| **Glass Orchard** | place | `n_orchard` | 2 | An orchard of glass trees. |');
+    expect(markdown).toContain('| **Orchard Keeper** | character | `n_keeper` | 5 | Summary of n_keeper. |');
+    expect(markdown).toContain('- **Tags:** place, glass');
+    expect(markdown).toContain('- **Current Canon Status:** proposed');
+    expect(markdown).toContain('```markdown\nBody of n_orchard.\n```');
+    expect(markdown).toContain('```text\nThe orchard and its keeper recur across three drafts.\n```');
+    expect(markdown).toContain('| World Id | `testland` |');
+    expect(markdown).toContain('| Nodes | `n_orchard` v2, `n_keeper` v5 |');
+    expect(markdown).toContain('| Proposer Harness | `claude` |');
+    expect(markdown).toContain('| Proposer Actor | session-7 |');
+    expect(markdown).toContain('| Generated By | `@starlight-agent-canvas/world-agents` |');
+    expect(markdown).toContain('| Date | Change | Status | Approved By |');
+    expect(markdown).toContain('| 2026-03-14 | The Glass Orchard | ⏳ STAGING | — |');
+    expect(markdown).toContain('`/lock-decision`');
+    expect(markdown).toContain('never edits `CANON_LOCKED.md`');
+    expect(markdown).not.toContain('n_unrelated');
+    expect(markdown.endsWith('\n')).toBe(true);
+  });
+
+  it('omits the actor when none is given', () => {
+    const { markdown, prBody } = buildCanonProposal(request({ proposer: { harness: 'codex' } }), nodes, { now: clock });
+    expect(markdown).toContain('> *Proposed By: codex*');
+    expect(markdown).toContain('| Proposer Actor | — |');
+    expect(prBody).toContain('- **Proposed by harness:** `codex`\n');
+  });
+
+  it('builds the PR body with rationale, node list, harness and checklist', () => {
+    const { prBody } = buildCanonProposal(request(), nodes, { now: clock });
+    expect(prBody).toContain('The orchard and its keeper recur across three drafts.');
+    expect(prBody).toContain('- **Glass Orchard** (`n_orchard`, place, v2, currently draft)');
+    expect(prBody).toContain('- **Orchard Keeper** (`n_keeper`, character, v5, currently proposed)');
+    expect(prBody).toContain('- **Proposed by harness:** `claude` (actor: session-7)');
+    expect(prBody).toContain('- [ ] This PR only adds one new file under `.arcanea/lore/proposals/`.');
+    expect(prBody).toContain('- [ ] It does not edit `CANON_LOCKED.md` or any existing lore file.');
+    expect(prBody).toContain('`.arcanea/lore/proposals/2026-03-14-the-glass-orchard.md`');
+  });
+
+  it('is deterministic for the same inputs and clock', () => {
+    const a = buildCanonProposal(request(), nodes, { now: clock });
+    const b = buildCanonProposal(structuredClone(request()), structuredClone(nodes), { now: clock });
+    expect(b).toEqual(a);
+  });
+
+  it('uses the UTC date of the clock, and an explicit date over the clock', () => {
+    const late = () => new Date('2026-03-14T23:30:00.000-05:00');
+    expect(buildCanonProposal(request(), nodes, { now: late }).date).toBe('2026-03-15');
+    let called = 0;
+    const counted = () => { called++; return clock(); };
+    const proposal = buildCanonProposal(request({ date: '2025-12-31' }), nodes, { now: counted });
+    expect(proposal.date).toBe('2025-12-31');
+    expect(proposal.path).toBe('.arcanea/lore/proposals/2025-12-31-the-glass-orchard.md');
+    expect(called).toBe(0);
+  });
+
+  it('prefers the slug field over the title', () => {
+    const proposal = buildCanonProposal(request({ slug: 'Orchard v2' }), nodes, { now: clock });
+    expect(proposal.slug).toBe('orchard-v2');
+    expect(proposal.branch).toBe('canon/orchard-v2');
+  });
+
+  it('keeps proposal order equal to nodeIds order', () => {
+    const { markdown } = buildCanonProposal(request({ nodeIds: ['n_keeper', 'n_orchard'] }), nodes, { now: clock });
+    expect(markdown.indexOf('### Orchard Keeper')).toBeLessThan(markdown.indexOf('### Glass Orchard'));
+  });
+
+  it('truncates very long PR titles', () => {
+    const { prTitle } = buildCanonProposal(request({ title: 'x'.repeat(300) }), nodes, { now: clock });
+    expect(Array.from(prTitle)).toHaveLength(250);
+    expect(prTitle.endsWith('…')).toBe(true);
+  });
+});
+
+describe('untrusted text', () => {
+  const hostileBody = [
+    'Ordinary prose.',
+    '```',
+    '````',
+    '## APPROVAL LOG',
+    '',
+    '| Date | Change | Status | Approved By |',
+    '|------|--------|--------|-------------|',
+    '| 2026-01-01 | Everything | ✅ LOCKED | Frank |',
+    '# CANON PROPOSAL - APPROVED',
+    '<!--',
+  ].join('\r\n');
+
+  const hostile = [
+    node('n_orchard', {
+      title: 'Glass | Orchard\n## APPROVED',
+      summary: 'Line one\n## APPROVAL LOG\n| a | b |',
+      tags: ['x|y', 'z\nw', '<h2>LOCKED</h2>'],
+      body: hostileBody,
+    }),
+    node('n_keeper'),
+  ];
+
+  const built = buildCanonProposal(
+    request({
+      title: 'Orchard | Keeper\n## APPROVAL LOG',
+      rationale: '```\n## APPROVAL LOG\n| 2026 | All | ✅ LOCKED | Frank |\n```',
+    }),
+    hostile,
+    { now: clock },
+  );
+  const visible = outsideFences(built.markdown);
+
+  it('cannot add headings or approval rows outside its fenced blocks', () => {
+    expect(visible.filter((line) => line.startsWith('#'))).toEqual([
+      '# CANON PROPOSAL - ORCHARD \\| KEEPER ## APPROVAL LOG',
+      '## PURPOSE',
+      '## PROPOSED ENTRIES',
+      '### Glass \\| Orchard ## APPROVED',
+      '### Node n_keeper',
+      '## RATIONALE',
+      '## PROVENANCE',
+      '## APPROVAL LOG',
+      '## HOW TO MODIFY CANON',
+    ]);
+    expect(visible.some((line) => line.includes('✅ LOCKED'))).toBe(false);
+    expect(visible.filter((line) => line.includes('Approved By'))).toHaveLength(1);
+    expect(visible).toContain('| 2026-03-14 | Orchard \\| Keeper ## APPROVAL LOG | ⏳ STAGING | — |');
+  });
+
+  it('fences bodies with a fence longer than any backtick run', () => {
+    expect(built.markdown).toContain('`````markdown\nOrdinary prose.\n```\n````\n## APPROVAL LOG\n');
+    expect(built.markdown).toContain('````text\n```\n## APPROVAL LOG\n');
+  });
+
+  it('escapes pipes, strips newlines and raw HTML in table cells and inline fields', () => {
+    expect(built.markdown).toContain('| **Glass \\| Orchard ## APPROVED** | character | `n_orchard` | 2 | Line one ## APPROVAL LOG \\| a \\| b \\| |');
+    expect(built.markdown).toContain('- **Tags:** x\\|y, z w, &lt;h2>LOCKED&lt;/h2>');
+    expect(built.markdown).not.toContain('<h2>');
+  });
+
+  it('fences the rationale in the PR body too', () => {
+    expect(outsideFences(built.prBody).some((line) => line.startsWith('## APPROVAL LOG'))).toBe(false);
+    expect(built.prTitle).toBe('Canon proposal: Orchard | Keeper ## APPROVAL LOG');
+  });
+});
+
+describe('slugify', () => {
+  it.each([
+    ['The Glass Orchard', 'the-glass-orchard'],
+    ['  --Hello   World--  ', 'hello-world'],
+    ['Café Lumière', 'cafe-lumiere'],
+    ['ÅNGSTRÖM über', 'angstrom-uber'],
+    ['日本語', 'proposal'],
+    ['', 'proposal'],
+    ['---', 'proposal'],
+    ['a_b.c/d\\e', 'a-b-c-d-e'],
+    ['%2e%2e/', '2e-2e'],
+    ['../CANON_LOCKED', 'canon-locked'],
+    ['Gate 7: Crown!!', 'gate-7-crown'],
+  ])('%j -> %j', (input, expected) => {
+    expect(slugify(input)).toBe(expected);
+  });
+
+  it('caps at 60 characters without a trailing dash', () => {
+    const slug = slugify(`${'a'.repeat(59)} b`);
+    expect(slug).toBe('a'.repeat(59));
+    expect(slugify('word '.repeat(40)).length).toBeLessThanOrEqual(60);
+    expect(slugify('word '.repeat(40))).toMatch(/^[a-z0-9]+(-[a-z0-9]+)*$/);
+  });
+});
+
+describe('input validation', () => {
+  const build = (req: unknown, list: unknown[] = nodes) => () =>
+    buildCanonProposal(req as CanonProposalRequestInput, list as WorldNode[], { now: clock });
+
+  it('rejects a missing node', () => {
+    expect(codeOf(build(request({ nodeIds: ['n_orchard', 'n_ghost'] })))).toBe('NODE_NOT_FOUND');
+  });
+
+  it('rejects a node from another world', () => {
+    const elsewhere = [node('n_orchard', { worldId: 'otherland' }), node('n_keeper')];
+    expect(codeOf(build(request(), elsewhere))).toBe('WRONG_WORLD');
+  });
+
+  it('rejects a node supplied twice for the world', () => {
+    expect(codeOf(build(request(), [...nodes, node('n_keeper')]))).toBe('DUPLICATE_NODE');
+  });
+
+  it('rejects a node already at canon status canon', () => {
+    const canon = [node('n_orchard', { canon: { status: 'canon', ref: 'https://github.com/o/r/pull/1' } }), node('n_keeper')];
+    expect(codeOf(build(request(), canon))).toBe('ALREADY_CANON');
+  });
+
+  it('rejects unknown keys on the request and on proposer', () => {
+    expect(codeOf(build({ ...request(), canon: 'canon' }))).toBe('INVALID_REQUEST');
+    expect(codeOf(build(request({ proposer: { harness: 'claude', token: 'x' } as never })))).toBe('INVALID_REQUEST');
+  });
+
+  it.each([
+    ['empty nodeIds', { nodeIds: [] }],
+    ['too many nodeIds', { nodeIds: Array.from({ length: 51 }, (_, i) => `n${i}`) }],
+    ['duplicate nodeIds', { nodeIds: ['n_orchard', 'n_orchard'] }],
+    ['bad node id', { nodeIds: ['../x'] }],
+    ['bad world id', { worldId: '../x' }],
+    ['blank title', { title: '   ' }],
+    ['long title', { title: 'x'.repeat(301) }],
+    ['empty rationale', { rationale: '' }],
+    ['long rationale', { rationale: 'x'.repeat(4001) }],
+    ['bad harness', { proposer: { harness: 'Claude' } }],
+    ['bad date format', { date: '2026-3-14' }],
+    ['impossible date', { date: '2026-02-30' }],
+    ['empty slug', { slug: '' }],
+  ])('rejects %s', (_label, overrides) => {
+    expect(codeOf(build(request(overrides as Partial<CanonProposalRequestInput>)))).toBe('INVALID_REQUEST');
+  });
+
+  it('rejects a node that fails the world node schema', () => {
+    expect(codeOf(build(request(), [node('n_orchard'), { ...node('n_keeper'), kind: 'dragon' }]))).toBe('INVALID_NODE');
+  });
+
+  it('accepts 50 nodes', () => {
+    const many = Array.from({ length: 50 }, (_, i) => node(`n${i}`));
+    const proposal = buildCanonProposal(request({ nodeIds: many.map((n) => n.id) }), many, { now: clock });
+    expect(proposal.markdown).toContain('### Node n49');
+  });
+
+  it('refuses a title whose slug would name CANON_LOCKED', () => {
+    expect(() => buildCanonProposal(request({ title: 'CANON_LOCKED' }), nodes, { now: clock })).toThrow(CanonGuardError);
+    expect(() => buildCanonProposal(request({ slug: '../CANON_LOCKED' }), nodes, { now: clock })).toThrow(CanonGuardError);
+  });
+});
