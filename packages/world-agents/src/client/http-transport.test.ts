@@ -546,6 +546,8 @@ describe('HttpMcpTransport review fixes', () => {
     ['STALE_VERSION: node n_x is at 4', 'STALE_VERSION', 'node n_x is at 4'],
     ['CANON_LOCKED: node n_x is canon', 'CANON_LOCKED', 'node n_x is canon'],
     ['UNAUTHORIZED: token lacks write scope', 'UNAUTHORIZED', 'token lacks write scope'],
+    ['INVALID_INPUT: bounds: Too small', 'INVALID_INPUT', 'bounds: Too small'],
+    ['BOUNDS_TOO_LARGE: Bounds cover more than 1024 tiles.', 'BOUNDS_TOO_LARGE', 'Bounds cover more than 1024 tiles.'],
     ['NOT_A_CODE: whatever', 'TOOL_ERROR', 'NOT_A_CODE: whatever'],
     ['stale_version: lower case', 'TOOL_ERROR', 'stale_version: lower case'],
     ['STALE_VERSION without colon', 'TOOL_ERROR', 'STALE_VERSION without colon'],
@@ -683,5 +685,71 @@ describe('HttpMcpTransport second review', () => {
     expect(error).toBeInstanceOf(WorldTransportError);
     expect((error as Error).message).toContain('timed out after 10 ms');
     expect((error as Error).message).toContain('may still have completed on the server (a write may have been applied); re-read before retrying');
+  });
+});
+
+describe('HttpMcpTransport against the L2 server shapes', () => {
+  /** A stateless createMcpHandler-like server: no Mcp-Session-Id, SSE replies, text-only tool results. */
+  function statelessL2(tools: Record<string, (args: Record<string, unknown>) => { text: string; isError?: boolean }>) {
+    const sent: Sent[] = [];
+    const fetch = vi.fn(async (url: string, init: RequestInit) => {
+      const entry: Sent = { url, headers: { ...(init.headers as Record<string, string>) }, body: JSON.parse(String(init.body)) };
+      sent.push(entry);
+      const reply = (result: unknown) => sse(`event: message\ndata: ${JSON.stringify({ jsonrpc: '2.0', id: entry.body.id, result })}\n\n`);
+      if (entry.body.method === 'initialize') {
+        return reply({ protocolVersion: MCP_PROTOCOL_VERSION, capabilities: { tools: {} }, serverInfo: { name: 'starlight-world', version: '0.1.0' } });
+      }
+      if (entry.body.method === 'notifications/initialized') return accepted();
+      const params = entry.body.params as { name: string; arguments: Record<string, unknown> };
+      const { text, isError } = tools[params.name]!(params.arguments);
+      return reply({ content: [{ type: 'text', text }], ...(isError ? { isError: true } : {}) });
+    });
+    return { fetch, sent };
+  }
+
+  it('runs typed calls end to end with no session id', async () => {
+    const world = { id: 'arcanea', title: 'Arcanea', summary: '', version: 4, regions: [], updatedAt: '2026-11-25T00:00:00.000Z' };
+    const server = statelessL2({
+      get_world: () => ({ text: JSON.stringify({ world, counts: { nodes: 0, edges: 0, nodesByKind: {}, edgesByRelation: {} }, openProposals: 0 }) }),
+      update_node: () => ({
+        isError: true,
+        text: JSON.stringify({ ok: false, version: 4, error: { code: 'STALE_VERSION', message: 'node n_a is at version 3, op was based on 2. Re-read and retry.', opIndex: 0, id: 'n_a', expectedVersion: 2, actualVersion: 3 } }),
+      }),
+      get_region: () => ({ isError: true, text: JSON.stringify({ ok: false, version: 4, error: { code: 'BOUNDS_TOO_LARGE', message: 'Bounds cover more than 1024 tiles. Zoom in or split the request.' } }) }),
+    });
+    const client = createWorldClient({ transport: transport(server.fetch), worldId: 'arcanea' });
+
+    await expect(client.getWorld({})).resolves.toMatchObject({ world: { id: 'arcanea', version: 4 }, openProposals: 0 });
+
+    const stale = await client.updateNode({ id: 'n_a', baseVersion: 2, patch: { title: 'A' } }).catch((e: unknown) => e) as WorldToolError;
+    expect(stale).toBeInstanceOf(WorldToolError);
+    expect(stale).toMatchObject({ code: 'STALE_VERSION', isStale: true, opIndex: 0, id: 'n_a', expectedVersion: 2, actualVersion: 3, worldVersion: 4 });
+
+    const tooLarge = await client.getRegion({ bounds: { x: 0, y: 0, w: 1e9, h: 1e9 } }).catch((e: unknown) => e) as WorldToolError;
+    expect(tooLarge).toMatchObject({ code: 'BOUNDS_TOO_LARGE', worldVersion: 4 });
+
+    for (const s of server.sent) expect(s.headers['Mcp-Session-Id']).toBeUndefined();
+    expect(server.sent.filter((s) => s.body.method === 'initialize')).toHaveLength(1);
+  });
+
+  it('maps L2 INVALID_INPUT and the import error envelope', async () => {
+    const server = statelessL2({
+      get_region: () => ({ isError: true, text: JSON.stringify({ ok: false, version: 0, error: { code: 'INVALID_INPUT', message: 'query: Pass regionId or bounds.' } }) }),
+      import_whiteboard: () => ({ isError: true, text: JSON.stringify({ ok: false, version: 2, error: { code: 'DUPLICATE_ID', message: 'World arcanea already has content.' }, report: { nodesOut: 3 } }) }),
+    });
+    const t = transport(server.fetch);
+    await expect(t.callTool('get_region', {})).rejects.toMatchObject({ code: 'INVALID_INPUT', worldVersion: 0 });
+    await expect(t.callTool('import_whiteboard', {})).rejects.toMatchObject({ code: 'DUPLICATE_ID', worldVersion: 2 });
+  });
+
+  it('maps the L2 401 body to WorldAuthError', async () => {
+    const fetch = vi.fn(async () => new Response(JSON.stringify({ error: { code: 'UNAUTHENTICATED', message: 'Authentication required.' } }), {
+      status: 401,
+      headers: { 'content-type': 'application/json', 'www-authenticate': 'Bearer realm="world-edge"' },
+    }));
+    const error = await transport(fetch).callTool('get_world', {}).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(WorldAuthError);
+    expect((error as WorldAuthError).status).toBe(401);
+    expectNoSecrets(error);
   });
 });

@@ -26,13 +26,15 @@ export class WorldTransportError extends WorldClientError {
 }
 
 export interface WorldToolErrorDetail {
-  /** An op error code from spec 4.2 (for example STALE_VERSION), or a transport-level code. */
+  /** An op error code from spec 4.2 (for example STALE_VERSION), an L2 code (INVALID_INPUT, BOUNDS_TOO_LARGE), or a client-side code (TOOL_ERROR, RPC_ERROR). */
   code: string;
   message: string;
   opIndex?: number;
   id?: string;
   expectedVersion?: number;
   actualVersion?: number;
+  /** World version the server reported with the failure (L2's `version` next to `error`). */
+  worldVersion?: number;
   /** JSON-RPC error code, when the error came from a JSON-RPC error response. */
   rpcCode?: number;
 }
@@ -45,6 +47,7 @@ export class WorldToolError extends WorldClientError {
   readonly id?: string;
   readonly expectedVersion?: number;
   readonly actualVersion?: number;
+  readonly worldVersion?: number;
   readonly rpcCode?: number;
 
   constructor(tool: string, detail: WorldToolErrorDetail) {
@@ -55,6 +58,7 @@ export class WorldToolError extends WorldClientError {
     if (detail.id !== undefined) this.id = detail.id;
     if (detail.expectedVersion !== undefined) this.expectedVersion = detail.expectedVersion;
     if (detail.actualVersion !== undefined) this.actualVersion = detail.actualVersion;
+    if (detail.worldVersion !== undefined) this.worldVersion = detail.worldVersion;
     if (detail.rpcCode !== undefined) this.rpcCode = detail.rpcCode;
   }
 

@@ -2,34 +2,34 @@
 
 Status: draft for issue #63, lane L5. Researched and written on 2026-11-25.
 
-This page says how Claude Code, OpenAI Codex (CLI, IDE extension, desktop app, Cloud) and ChatGPT connect to the one remote World Canvas MCP server that lane L2 runs on Cloudflare Workers. The tool contract is in [spec.md](./spec.md) section 8. How an agent should use the tools once connected is in [`.claude/skills/world-canvas/SKILL.md`](../../.claude/skills/world-canvas/SKILL.md).
+This page says how Claude Code, OpenAI Codex (CLI, IDE extension, desktop app, Cloud) and ChatGPT connect to the one remote World Canvas MCP server that lane L2 runs on Cloudflare Workers (`apps/world-edge`, branch `agent/claude-cloud/world-edge`, read at commit 161c054). The tool list is in [spec.md](./spec.md) section 8 and the exact arguments and results are in [tool-contract.md](./tool-contract.md). How an agent should use the tools once connected is in [`.claude/skills/world-canvas/SKILL.md`](../../.claude/skills/world-canvas/SKILL.md).
 
 Vendor docs change often. Every claim below names its source and the date it was read. None of the vendor pages shows a "last updated" date unless one is quoted, so the date given is the date we fetched the page. Re-check any line marked "unconfirmed" before you rely on it.
 
 ## At a glance
 
-| Client | Works with L2's current design (Access + static bearer)? | Where the config lives |
+| Client | Works with L2's auth at 161c054 (per-client bearer service token, or an Access JWT)? | Where the config lives |
 | --- | --- | --- |
-| Claude Code | Yes, with a bearer header, plus Access service-token headers if Access fronts `/mcp` | `.mcp.json` (project) or `~/.claude.json` |
+| Claude Code | Yes, with its own bearer token (plus Access service-token headers only if Access gates `/mcp`) | `.mcp.json` (project) or `~/.claude.json` |
 | Codex CLI, IDE extension, ChatGPT desktop app | Yes, same as above | `~/.codex/config.toml` or `.codex/config.toml` (trusted projects) |
 | Codex Cloud | No. Cloud tasks have no documented way to use MCP servers | none |
 | ChatGPT (web, custom MCP server / plugin) | Not directly. ChatGPT only does OAuth or no auth (an untested tunnel route exists, see below) | ChatGPT Plugins UI |
 | Claude.ai and Claude Desktop custom connectors | Not without changes. They connect from Anthropic's cloud and default to OAuth | Claude settings, Connectors |
 
-"L2's current design" on this page means the design L2 was briefed to build for issue #63: Cloudflare Access in front of the Worker plus a static bearer token. L2's code is not on any branch yet, so this is unconfirmed against code. The short version for L2: local agents can work with a bearer token. ChatGPT needs a standard MCP OAuth surface on the Worker. The follow-up spec is in [chatgpt-oauth-followup.md](./chatgpt-oauth-followup.md).
+How L2 authenticates, from `apps/world-edge/src/auth.ts` and its README at 161c054: `/mcp` accepts `Authorization: Bearer <service token>`, where the Worker secret `MCP_SERVICE_TOKENS` holds a SHA-256 hash, a name and a `harness` per token, so every client gets its own token and the ops log records which harness wrote what. Browsers use a Cloudflare Access JWT instead. L2's README suggests an Access Bypass or Service Auth rule for `/mcp` so MCP clients reach the Worker with only the bearer token. The Worker is not deployed yet; deploying it and the Access policy are Frank's decision. The short version: local agents work with a bearer token. ChatGPT needs a standard MCP OAuth surface on the Worker. The follow-up spec is in [chatgpt-oauth-followup.md](./chatgpt-oauth-followup.md).
 
 ## Values used on this page
 
 | Name | Meaning |
 | --- | --- |
-| `https://world.example.workers.dev/mcp` | Placeholder. Replace with the real L2 endpoint once it is deployed. If L2 adopts option R7(b) of the OAuth follow-up, the static-bearer URL for local agents is a different hostname from the OAuth URL that ChatGPT uses. |
+| `https://world-edge.<account>.workers.dev/mcp` | The endpoint L2's README gives. Replace `<account>` once it is deployed. A custom domain needs L2 to pass `allowedHostnames` to `createMcpHandler` (L2 README). If L2 adopts option R7(b) of the OAuth follow-up, the bearer URL for local agents is a different hostname from the OAuth URL that ChatGPT uses. |
 | `WORLD_CANVAS_URL` | Optional env var for the endpoint. |
-| `WORLD_CANVAS_TOKEN` | Env var holding the static bearer token that L2 issues. Never commit its value. |
-| `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET` | Env vars holding a Cloudflare Access service token, only if L2 puts Access in front of `/mcp`. |
+| `WORLD_CANVAS_TOKEN` | Env var holding this client's service token (L2's README generates it with `openssl rand -hex 32` and stores only its hash). Use a different token per client and per person. Never commit its value. |
+| `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET` | Env vars holding a Cloudflare Access service token, needed only if the Access policy on `/mcp` is Service Auth rather than Bypass. |
 
 Set the variables in the shell (or IDE process) that launches the agent, for example with `direnv` or your shell profile. Do not put the values in any file that is committed.
 
-About the Cloudflare Access headers: Cloudflare Access accepts a service token sent as the `CF-Access-Client-Id` and `CF-Access-Client-Secret` request headers when the Access application has a Service Auth policy. Neither Anthropic nor OpenAI documents Cloudflare Access, so the header examples below are our design, not vendor guidance. Whether `/mcp` sits behind Access at all is L2's decision. If it does not, drop those two headers everywhere on this page.
+About the Cloudflare Access headers: Cloudflare Access accepts a service token sent as the `CF-Access-Client-Id` and `CF-Access-Client-Secret` request headers when the Access application has a Service Auth policy. Neither Anthropic nor OpenAI documents Cloudflare Access, so the header examples below are our design, not vendor guidance. With an Access Bypass rule on `/mcp` (L2's README option), leave those two headers out; the examples below show them as an optional variant.
 
 ## Claude Code
 
@@ -40,17 +40,22 @@ Source: https://code.claude.com/docs/en/mcp, fetched 2026-11-25.
 ```json
 {
   "mcpServers": {
-    "world-canvas": {
+    "starlight-world": {
       "type": "http",
-      "url": "${WORLD_CANVAS_URL:-https://world.example.workers.dev/mcp}",
+      "url": "${WORLD_CANVAS_URL:-https://world-edge.<account>.workers.dev/mcp}",
       "headers": {
-        "Authorization": "Bearer ${WORLD_CANVAS_TOKEN}",
-        "CF-Access-Client-Id": "${CF_ACCESS_CLIENT_ID}",
-        "CF-Access-Client-Secret": "${CF_ACCESS_CLIENT_SECRET}"
+        "Authorization": "Bearer ${WORLD_CANVAS_TOKEN}"
       }
     }
   }
 }
+```
+
+Only if the Access policy on `/mcp` is Service Auth, add these two lines to `headers` (with Bypass, leave them out, because an unset variable would be sent as literal `${...}` text):
+
+```json
+        "CF-Access-Client-Id": "${CF_ACCESS_CLIENT_ID}",
+        "CF-Access-Client-Secret": "${CF_ACCESS_CLIENT_SECRET}"
 ```
 
 Facts from the Claude Code MCP docs:
@@ -62,24 +67,24 @@ Facts from the Claude Code MCP docs:
 - When `headers.Authorization` is set, Claude Code uses it and does not fall back to OAuth. A rejected token shows as a failed connection.
 - Interactive sessions ask for approval before using a server from `.mcp.json`. Until then `claude mcp list` shows it as pending. `claude mcp reset-project-choices` clears the choice. Non-interactive runs (`claude -p`, the Agent SDK, cloud sessions) load project servers without asking.
 
-This repo's root `.mcp.json` currently holds the local `starlight-agent-canvas` stdio server. This lane does not change it. Add the `world-canvas` entry next to it when L2 publishes a real URL.
+This repo's root `.mcp.json` currently holds the local `starlight-agent-canvas` stdio server. This lane does not change it. Add the `starlight-world` entry next to it when L2 publishes a real URL.
 
 ### CLI form
 
 ```bash
-claude mcp add-json --scope project world-canvas \
-  '{"type":"http","url":"https://world.example.workers.dev/mcp","headers":{"Authorization":"Bearer ${WORLD_CANVAS_TOKEN}"}}'
+claude mcp add-json --scope project starlight-world \
+  '{"type":"http","url":"https://world-edge.<account>.workers.dev/mcp","headers":{"Authorization":"Bearer ${WORLD_CANVAS_TOKEN}"}}'
 ```
 
-Single quotes stop your shell from expanding the variable. Whether the Claude Code CLI then stores the `${WORLD_CANVAS_TOKEN}` text unexpanded is not stated in the docs and we could not test it (unverified), so the safest path is to edit `.mcp.json` by hand and then check the file. Never run `claude mcp add --transport http ... --header "Authorization: Bearer $WORLD_CANVAS_TOKEN"` with double quotes in any scope: the shell expands the variable first and the token is written in plain text, into `.mcp.json` for `project` scope or `~/.claude.json` for `local` and `user` scope.
+Single quotes stop your shell from expanding the variable. Whether the Claude Code CLI then stores the `${WORLD_CANVAS_TOKEN}` text unexpanded is not stated in the docs and we could not test it (unverified), so the safest path is to edit `.mcp.json` by hand and then check the file. L2's README shows `claude mcp add --transport http starlight-world <url> --header "Authorization: Bearer <claude token>"`; that works but stores the token in plain text in `~/.claude.json`. Never run `claude mcp add --transport http ... --header "Authorization: Bearer $WORLD_CANVAS_TOKEN"` with double quotes in any scope: the shell expands the variable first and the token is written in plain text, into `.mcp.json` for `project` scope or `~/.claude.json` for `local` and `user` scope.
 
 Scopes: `local` (default, this project, stored in `~/.claude.json`), `project` (shared, stored in `.mcp.json`), `user` (all your projects, stored in `~/.claude.json`).
 
-Check it: `claude mcp get world-canvas`, `claude mcp list`, or `/mcp` inside a session.
+Check it: `claude mcp get starlight-world`, `claude mcp list`, or `/mcp` inside a session.
 
 ### OAuth in Claude Code
 
-Claude Code also supports OAuth for remote servers (dynamic client registration, client ID metadata documents, or a pre-registered client), started with `/mcp` or `claude mcp login world-canvas`. It discovers the authorization server from a 401 `WWW-Authenticate` header and RFC 9728 protected resource metadata. So once L2 ships the OAuth surface described in the follow-up spec, Claude Code users can drop the static header and sign in instead. Remove the `Authorization` header first, because a configured header disables the OAuth fallback.
+Claude Code also supports OAuth for remote servers (dynamic client registration, client ID metadata documents, or a pre-registered client), started with `/mcp` or `claude mcp login starlight-world`. It discovers the authorization server from a 401 `WWW-Authenticate` header and RFC 9728 protected resource metadata. So once L2 ships the OAuth surface described in the follow-up spec, Claude Code users can drop the static header and sign in instead. Remove the `Authorization` header first, because a configured header disables the OAuth fallback.
 
 ### Claude.ai and Claude Desktop custom connectors
 
@@ -94,12 +99,12 @@ Source: https://developers.openai.com/codex/mcp (canonical https://learn.chatgpt
 The ChatGPT desktop app, Codex CLI and the IDE extension share one MCP configuration in `config.toml`. The default file is `~/.codex/config.toml`. A project can also have `.codex/config.toml`, which Codex loads only for trusted projects.
 
 ```toml
-[mcp_servers.world-canvas]
-url = "https://world.example.workers.dev/mcp"
+[mcp_servers.starlight-world]
+url = "https://world-edge.<account>.workers.dev/mcp"
 # Codex sends the value of this variable as "Authorization: Bearer <value>".
 bearer_token_env_var = "WORLD_CANVAS_TOKEN"
-# Only if L2 puts Cloudflare Access in front of /mcp. Header name -> env var name.
-env_http_headers = { "CF-Access-Client-Id" = "CF_ACCESS_CLIENT_ID", "CF-Access-Client-Secret" = "CF_ACCESS_CLIENT_SECRET" }
+# Only if the Access policy on /mcp is Service Auth (not Bypass). Header name -> env var name.
+# env_http_headers = { "CF-Access-Client-Id" = "CF_ACCESS_CLIENT_ID", "CF-Access-Client-Secret" = "CF_ACCESS_CLIENT_SECRET" }
 startup_timeout_sec = 20
 tool_timeout_sec = 60
 # Ask before any tool that is not marked read-only.
@@ -119,7 +124,7 @@ Facts from the Codex MCP docs:
 CLI form (writes to the user-level `~/.codex/config.toml`; edit `.codex/config.toml` by hand for a project entry):
 
 ```bash
-codex mcp add world-canvas --url https://world.example.workers.dev/mcp --bearer-token-env-var WORLD_CANVAS_TOKEN
+codex mcp add starlight-world --url https://world-edge.<account>.workers.dev/mcp --bearer-token-env-var WORLD_CANVAS_TOKEN
 codex mcp list
 ```
 
@@ -139,7 +144,7 @@ What to do instead: run world edits from Codex CLI, the IDE extension or the des
 
 Sources, all fetched 2026-11-25: https://developers.openai.com/plugins/build/auth.md (read in full by the lane lead), https://developers.openai.com/api/docs/guides/developer-mode (custom MCP server guide, read by our research agent), https://developers.openai.com/codex/mcp.
 
-### Plain answer: ChatGPT cannot connect directly to L2's current design
+### Plain answer: ChatGPT cannot connect directly to L2's server as built
 
 ChatGPT's custom MCP servers support OAuth, no authentication, or a mix of the two per tool. OpenAI's auth guide says ChatGPT does not support machine-to-machine OAuth grants such as client credentials, and cannot present custom API keys. So ChatGPT cannot send our static bearer token, and it cannot send Cloudflare Access service-token headers. Behind an Access login wall its requests are stopped before they reach the Worker (our inference: Access answers non-browser clients without a valid token with a login redirect). Even past Access, the only bearer ChatGPT ever sends is an OAuth access token it obtained itself.
 

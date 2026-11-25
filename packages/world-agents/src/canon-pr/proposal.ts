@@ -47,13 +47,15 @@ function oneLine(text: string): string {
  * ftp and others), `www.` hosts, email addresses and `mailto:`/`xmpp:` links,
  * @mentions, #123 and owner/repo#123 references, GH-123. These go into code
  * spans, where GitHub links nothing. None of the patterns can contain a
- * backtick or a pipe.
+ * backtick or a pipe. The scheme and email local-part quantifiers are bounded
+ * (32 and 64 characters) so a long alphanumeric run is not rescanned from
+ * every position; a longer prefix stays outside the code span as plain text.
  */
 const LIVE_TOKEN = new RegExp([
-  /[a-z][a-z0-9+.-]*:\/\/[^\s`|()<>[\]"']+/.source,
+  /[a-z][a-z0-9+.-]{0,31}:\/\/[^\s`|()<>[\]"']+/.source,
   /www\.[^\s`|()<>[\]"']+/.source,
   /(?:mailto|xmpp):[^\s`|()<>[\]"']+/.source,
-  /[\w.+-]+@[\w-]+(?:\.[\w-]+)+/.source,
+  /[\w.+-]{1,64}@[\w-]+(?:\.[\w-]+)+/.source,
   /[@#][A-Za-z0-9][\w./-]*/.source,
   /\bGH-\d+\b/.source,
 ].join('|'), 'gi');
@@ -61,12 +63,30 @@ const LIVE_TOKEN = new RegExp([
 const MARKDOWN_PUNCTUATION = /[\\`*_[\]()!#@&~<>|$]/g;
 
 /**
+ * Longest inline value rendered, in UTF-16 code units. Longer values are cut
+ * and end in an ellipsis. Besides keeping the document readable, this bounds
+ * the cost of LIVE_TOKEN, which can rescan long alphanumeric runs
+ * (canon.ref, for one, has no length limit in L1).
+ */
+export const INLINE_TEXT_MAX = 2_000;
+
+function capInline(line: string): string {
+  if (line.length <= INLINE_TEXT_MAX) return line;
+  let cut = line.slice(0, INLINE_TEXT_MAX);
+  // Do not leave half of a surrogate pair at the cut.
+  const last = cut.charCodeAt(cut.length - 1);
+  if (last >= 0xd800 && last <= 0xdbff) cut = cut.slice(0, -1);
+  return `${cut}…`;
+}
+
+/**
  * Untrusted text placed inline (table cells, list items, headings): one line,
- * Markdown punctuation backslash-escaped so it renders literally, and
- * URLs, mentions and issue references in code spans so they cannot link, ping or close issues.
+ * at most INLINE_TEXT_MAX characters, Markdown punctuation backslash-escaped
+ * so it renders literally, and URLs, mentions and issue references in code
+ * spans so they cannot link, ping or close issues.
  */
 export function inlineMarkdown(text: string): string {
-  const line = oneLine(text);
+  const line = capInline(oneLine(text));
   let out = '';
   let last = 0;
   for (const match of line.matchAll(LIVE_TOKEN)) {

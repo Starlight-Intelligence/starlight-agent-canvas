@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { WorldNode } from '@starlight-agent-canvas/world';
 import { CanonGuardError, CanonProposalError } from './errors.js';
-import { buildCanonProposal, inlineMarkdown, slugify } from './proposal.js';
+import { buildCanonProposal, INLINE_TEXT_MAX, inlineMarkdown, slugify } from './proposal.js';
 import type { CanonProposalRequestInput } from './request.js';
 
 const T0 = '2026-01-01T00:00:00.000Z';
@@ -298,6 +298,43 @@ describe('inline Markdown spoofing', () => {
   it('renders the ftp example as one literal code span', () => {
     expect(inlineMarkdown('ftp://e.x\\*\\*\\#\\#')).toBe('`ftp://e.x\\*\\*\\#\\#`');
     expect(inlineMarkdown('mail frank@example.com')).toBe('mail `frank@example.com`');
+  });
+
+  it('code-spans a link after a long prefix, since the scheme and local-part quantifiers are bounded', () => {
+    for (const text of [`${'a'.repeat(200)}ftp://e.x/y`, `${'a'.repeat(200)}@example.com`, `${'a.'.repeat(100)}https://e.x`]) {
+      const out = inlineMarkdown(text);
+      expect(live(out)).not.toMatch(/:\/\/|@|www\./);
+    }
+  });
+
+  it('renders a 100k-character ref or title in well under 100 ms, capped with an ellipsis', () => {
+    const huge = [
+      `a:${'a'.repeat(100_000)}`,
+      'a'.repeat(100_000),
+      'a.'.repeat(50_000),
+      'a-'.repeat(50_000),
+      `${'a'.repeat(99_990)}ftp://e.x`,
+      `${'a'.repeat(99_990)}@e.x`,
+    ];
+    for (const text of huge) {
+      const started = performance.now();
+      const out = inlineMarkdown(text);
+      expect(performance.now() - started).toBeLessThan(100);
+      expect(out.endsWith('…')).toBe(true);
+      expect(out.length).toBeLessThan(INLINE_TEXT_MAX * 2 + 10);
+    }
+    const ref = `a:${'a'.repeat(100_000)}`;
+    const started = performance.now();
+    const built = buildCanonProposal(request({ nodeIds: ['n_orchard'] }), [node('n_orchard', { canon: { status: 'draft', ref } })], { now: clock });
+    expect(performance.now() - started).toBeLessThan(100);
+    expect(built.markdown).toContain('(ref: a:aaa');
+    expect(built.markdown).not.toContain(ref);
+  });
+
+  it('does not split a surrogate pair at the cap', () => {
+    const out = inlineMarkdown(`${'a'.repeat(INLINE_TEXT_MAX - 1)}🐉🐉`);
+    expect(out).toBe(`${'a'.repeat(INLINE_TEXT_MAX - 1)}…`);
+    expect(inlineMarkdown('a'.repeat(INLINE_TEXT_MAX))).toBe('a'.repeat(INLINE_TEXT_MAX));
   });
 
   it('keeps mentions and references out of the file and the PR body', () => {

@@ -33,7 +33,7 @@ export const MAX_TIMEOUT_MS = 2_147_483_647;
 
 /**
  * Codes recognised at the start of a plain-text tool error ("STALE_VERSION: ...").
- * L1's OpErrorCode union plus UNAUTHORIZED.
+ * L1's OpErrorCode union, UNAUTHORIZED, and the L2 server's INVALID_INPUT and BOUNDS_TOO_LARGE.
  */
 const TEXT_ERROR_CODES = [
   'INVALID_OP',
@@ -45,7 +45,9 @@ const TEXT_ERROR_CODES = [
   'CANON_LOCKED',
   'INVALID_REFERENCE',
   'UNAUTHORIZED',
-] as const satisfies readonly (OpErrorCode | 'UNAUTHORIZED')[];
+  'INVALID_INPUT',
+  'BOUNDS_TOO_LARGE',
+] as const satisfies readonly (OpErrorCode | 'UNAUTHORIZED' | 'INVALID_INPUT' | 'BOUNDS_TOO_LARGE')[];
 // Fails to compile if L1 adds an op error code that is missing above.
 const allOpErrorCodesListed: Exclude<OpErrorCode, (typeof TEXT_ERROR_CODES)[number]> extends never ? true : never = true;
 void allOpErrorCodesListed;
@@ -531,6 +533,8 @@ function readToolResult(tool: string, response: JsonRpcResponse, sanitize: (text
     const record = parsed && payload && typeof payload === 'object' ? payload as Record<string, unknown> : undefined;
     const nested = record?.error && typeof record.error === 'object' ? record.error as Record<string, unknown> : record;
     const detail = nested ? toolErrorDetail(nested, sanitize) : undefined;
+    // L2 puts the world version next to the error: {ok: false, version, error}.
+    if (detail && nested !== record && Number.isInteger(record?.version)) detail.worldVersion = record!.version as number;
     throw new WorldToolError(tool, detail ?? textErrorDetail(firstText?.text, sanitize));
   }
   if (!parsed) throw new WorldTransportError(`${tool} returned neither structuredContent nor JSON text content.`);

@@ -6,7 +6,8 @@ export type CanonProposalErrorCode =
   | 'NODE_NOT_FOUND'
   | 'WRONG_WORLD'
   | 'DUPLICATE_NODE'
-  | 'ALREADY_CANON';
+  | 'ALREADY_CANON'
+  | 'UNSUPPORTED_TARGET';
 
 /** The proposal request or its nodes are not acceptable. Nothing was built. */
 export class CanonProposalError extends Error {

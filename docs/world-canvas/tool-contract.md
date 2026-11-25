@@ -1,74 +1,74 @@
-# World Canvas MCP Tool Contract (client side, proposed)
+# World Canvas MCP Tool Contract (as the client sees it)
 
-Status: proposed by lane L5 on 2026-11-25 for issue #63. Spec section 8 names the tools and their rough inputs but not the exact argument nesting, the output shapes or the error envelope. `@starlight-agent-canvas/world-agents` needs all three to validate responses, so this page states what the client sends and accepts. L2 (the server) and L1 (the spec owner) should confirm it or change it; until then a server that answers differently will fail the client's output validation.
+Status: written by lane L5 on 2026-11-25 for issue #63. It mirrors L2's server on branch `agent/claude-cloud/world-edge` at commit 161c054 (`apps/world-edge/src/tools.ts`, `mcp.ts`, `world-agent.ts`, `region.ts`, `indexing.ts`, `store.ts`). L2's code is the authority for the server; spec section 8 names the tools but not the exact shapes. If L2 changes a shape, `@starlight-agent-canvas/world-agents` must change with it, because the client validates every result.
 
-The source of truth for this page is `packages/world-agents/src/client/tools.ts` (`WORLD_TOOLS`). Entity schemas (`WorldNode`, `WorldEdge`, `World`, `Actor`) are L1's, from `packages/world/src/schemas.ts`.
+The client's copy of this contract is `packages/world-agents/src/client/tools.ts` (`WORLD_TOOLS`). Entity schemas (`WorldNode`, `WorldEdge`, `World`, `Actor`, ops) are L1's, from `packages/world`.
 
 ## Transport
 
-- MCP Streamable HTTP, JSON-RPC 2.0, `POST` to the server URL. The client sends `initialize` (protocol version `2025-11-25`, then whatever version the server negotiates), `notifications/initialized`, then `tools/call`. It echoes `Mcp-Session-Id` and accepts `application/json` or `text/event-stream` responses.
+- MCP Streamable HTTP, JSON-RPC 2.0, `POST /mcp`. L2's handler (`createMcpHandler` from the Agents SDK) is stateless and sends no `Mcp-Session-Id`; the client works with or without one.
+- Auth: `Authorization: Bearer <service token>` (see [connect-agents.md](./connect-agents.md)). A 401 body is `{error: {code: "UNAUTHENTICATED", message}}`.
+- The client sends `initialize` (protocol version `2025-11-25`, then whatever version the server negotiates), `notifications/initialized`, then `tools/call`. It accepts `application/json` or `text/event-stream` responses.
 - The server URL must be https (http only for `localhost`, `127.0.0.1` or `[::1]`) and must have no query string or fragment.
-- Redirects are never followed. A 3xx response is an error.
-- Each request times out after 30 seconds by default (`timeoutMs`).
-- On HTTP 404 after a session started, the client re-initializes once and retries. Any other non-2xx response is a transport error carrying the status and the start of the body, with secrets removed.
-- A tool result's payload is read from `structuredContent`, or else from the first `text` content item parsed as JSON. Servers should send both.
+- Redirects are never followed. Each request times out after 30 seconds by default (`timeoutMs`). On HTTP 404 after a session started, the client re-initializes once. Any other non-2xx response is a transport error carrying the status and the start of the body, with secrets removed.
+- L2 returns every result as JSON in one `text` content item. The client also accepts `structuredContent` if a server sends it.
 
 ## Inputs
 
-Every input is a strict object: unknown keys are rejected. Every tool takes `worldId` except `import_whiteboard`, where omitting it means "create a new world".
+Every input is a strict object (unknown keys rejected) and every tool takes `worldId`.
 
 | Tool | Input |
 | --- | --- |
 | `get_world` | `{worldId}` |
-| `get_region` | `{worldId, regionId?, bounds?, level?}`, exactly one of `regionId` or `bounds`; `level` is `cluster`, `card` or `full` |
-| `search` | `{worldId, query (1..500 chars), kinds? (NodeKind[], at least 1), limit? (1..100)}` |
-| `add_node` | `{worldId, node}` where `node` is L1's `nodeInputSchema` with `id` optional; `regionId` is inside `node` |
+| `get_region` | `{worldId, regionId?, bounds?, level?, zoom?, kinds?, limit?}`: at least one of `regionId` or `bounds`; `level` is `cluster`, `card` or `full` (server default `card`, or derived from `zoom`); `kinds` NodeKind[]; `limit` 1..5000 |
+| `search` | `{worldId, query (1..500), kinds?, limit? (1..50, server default 20)}` |
+| `add_node` | `{worldId, node}`: L1's `nodeInputSchema` with `id` optional (the server makes one with `newId('n', title)`); `regionId` is inside `node` |
 | `update_node` | `{worldId, id, baseVersion, patch}` with L1's `nodePatchSchema` |
-| `link` | `{worldId, from, to, relation, label?}`, `from` differs from `to` |
+| `link` | `{worldId, from, to, relation, label?}` (the client also rejects `from` equal to `to`, which L1's op rejects anyway) |
 | `move` | `{worldId, moves: [{id, baseVersion, position, regionId?}]}` (1..5000) |
-| `propose_canon` | `{worldId, target: {type: 'node' or 'edge', id}, baseVersion, note (1..2000)}`; no `ref` and no status |
-| `layout_region` | `{worldId, regionId, strategy: 'grid', 'layered' or 'force'}` |
-| `import_whiteboard` | `{worldId?, whiteboard, lexicon?: {kinds?: Record<string, NodeKind>, tags?: Record<string, string[]>}}` |
+| `propose_canon` | `{worldId, title (1..300), targets: [{type: "node" or "edge", id, baseVersion}] (1..100), rationale (1..2000)}`; no status and no `ref` |
+| `layout_region` | `{worldId, regionId, strategy: "grid", "layered" or "force"}` |
+| `import_whiteboard` | `{worldId, whiteboard, lexicon?: {kinds?: Record<string, NodeKind>, tags?: Record<string, string[]>}, title?, dryRun?}`; only seeds an empty world |
 
 ## Outputs
 
-Every success payload includes `worldVersion` (integer, 0 or more), except that it is optional for `import_whiteboard`. Unknown extra keys on objects are ignored, so additive object fields are safe. Count maps (`counts.nodes`, `counts.edges`, `clusters[].counts`) and enum values (`kind`, `relation`, `level`) are checked against L1's lists, so a server that adds a new NodeKind or Relation breaks this client until L1 and the client are updated together.
+Unknown extra keys on objects are ignored, so additive server fields are safe.
 
 | Tool | Output |
 | --- | --- |
-| `get_world` | `{world: World, counts: {nodes: {[NodeKind]: int}, edges: {[Relation]: int}}, worldVersion}` (counts may omit kinds with zero) |
-| `get_region` | `{level, nodes: WorldNode[], edges: WorldEdge[], clusters?: [{tileKey: "<x>:<y>", counts: {[NodeKind]: int}}], worldVersion}` |
-| `search` | `{results: [{id, kind, title, summary, position, regionId (nullable), score?}], worldVersion}` |
-| `add_node` | `{node: WorldNode, worldVersion}` |
-| `update_node` | `{node: WorldNode, worldVersion}` |
-| `link` | `{edge: WorldEdge, worldVersion}` |
-| `move` | `{nodes: WorldNode[], worldVersion}` |
-| `propose_canon` | `{proposal: CanonProposal, prUrl? (https), worldVersion}` where `CanonProposal` mirrors L1's interface: `{targetType, id, title, version, ref?, note?, proposedBy: Actor}` |
-| `layout_region` | `{moved: WorldNode[], worldVersion}` |
-| `import_whiteboard` | `{report, worldId, worldVersion?, branch?}` |
+| `get_world` | `{world: World, counts: {nodes, edges, nodesByKind: Record<string, int>, edgesByRelation: Record<string, int>}, openProposals}` |
+| `get_region` | `{ok: true, version, level, bounds, regions, clusters: [{tile, count, byKind, center: {x, y}}], nodes, edges, truncated}` |
+| `search` | `{mode: "semantic", "d1-like" or "do-like", hits: [{id, kind, title, summary, position, regionId, score?}]}` |
+| `add_node`, `update_node`, `link`, `move` | WriteResult: `{ok: true, version, seq, nodes: WorldNode[], edges: WorldEdge[], removedNodes, removedEdges, proposals: CanonProposal[]}` |
+| `propose_canon` | WriteResult plus `proposalId` |
+| `layout_region` | WriteResult plus `moved` (a count) |
+| `import_whiteboard` | `{ok: true, version, seq, report}`, or with `dryRun` `{ok: true, dryRun: true, report}` |
 
-`nodes` and `edges` are always present. At `cluster` level they may be empty and `clusters` carries the counts. Nodes returned at `card` or `full` level are full `WorldNode` objects, so they carry `version`, which agents use as `baseVersion`. A server may leave `summary` and `body` empty at `card` level (the schema defaults them to `""`), so read at `full` level before editing a node's text.
+`version` on a result is the world version after the call. `get_world` carries it as `world.version`; `search` carries none.
+
+`get_region` by level: `cluster` returns per-tile `clusters` and empty `nodes` and `edges`; `card` returns node cards (`{id, kind, title, tags, position, size?, regionId, layer, canon, version, thumbnail?}`) and edge summaries (`{id, from, to, relation, label?, canon, version}`); `full` returns whole `WorldNode` and `WorldEdge` objects. Cards carry `version`, so agents can take `baseVersion` from them, but they have no `summary` or `body`: read at `full` before editing text. If `truncated` is true, more nodes matched than `limit`.
+
+`propose_canon` does not open a PR. It marks the targets `proposed` and stores a proposal row (`{id, title, nodeIds, edgeIds, rationale, status: "open", prUrl: null, worldVersion, harness, actor, createdAt}`, readable at `GET /agents/world-agent/<worldId>/proposals?status=open`). `canonProposalRequestFromRow` in `world-agents` turns such a row into input for `openCanonPr`, which opens the draft PR.
 
 ## Errors
 
-A tool failure is a tool result with `isError: true`. The client reads the error from the payload (structured or JSON text), in either of these shapes:
+A tool failure is a result with `isError: true` whose JSON text is:
 
 ```json
-{ "error": { "code": "STALE_VERSION", "message": "...", "opIndex": 0, "id": "n_x", "expectedVersion": 3, "actualVersion": 4 } }
+{ "ok": false, "version": 12, "error": { "code": "STALE_VERSION", "message": "...", "opIndex": 0, "id": "n_x", "expectedVersion": 3, "actualVersion": 4 } }
 ```
 
-```json
-{ "code": "STALE_VERSION", "message": "...", "id": "n_x", "expectedVersion": 3, "actualVersion": 4 }
-```
+The client throws `WorldToolError` with `code`, `message`, the optional `opIndex`, `id`, `expectedVersion`, `actualVersion`, and `worldVersion` from the top-level `version`. `isStale` is true for `STALE_VERSION`.
 
-In these structured shapes `code` may be any non-empty string; L1's `OpErrorCode` values are `INVALID_OP`, `INVALID_CONTEXT`, `NOT_FOUND`, `DUPLICATE_ID`, `STALE_VERSION`, `CANON_FORBIDDEN`, `CANON_LOCKED` and `INVALID_REFERENCE`. Servers should use the first (nested) shape.
+Codes seen in L2: L1's `OpErrorCode` values (`INVALID_OP`, `INVALID_CONTEXT`, `NOT_FOUND`, `DUPLICATE_ID`, `STALE_VERSION`, `CANON_FORBIDDEN`, `CANON_LOCKED`, `INVALID_REFERENCE`) plus `INVALID_INPUT` and `BOUNDS_TOO_LARGE` from `get_region`. The client also understands a flat `{code, message, ...}` payload, a JSON-RPC `error` whose `data` is that flat shape, and a plain-text `CODE: message` when `CODE` is one of the codes above or `UNAUTHORIZED` (a text error carries no version details).
 
-Fallbacks, in order of preference for a server: a JSON-RPC `error` whose `data` is the flat (second) shape is mapped the same way; a `data` holding the nested shape is not unwrapped and becomes code `RPC_ERROR`. A plain-text error of the form `CODE: message` keeps `CODE` only when it is exactly one of the eight `OpErrorCode` values or `UNAUTHORIZED` (upper case); any other text becomes code `TOOL_ERROR` with the text as the message. A text error never carries `opIndex`, `id`, `expectedVersion` or `actualVersion`, so a server must use a structured shape for `STALE_VERSION` if agents are to see the versions.
+HTTP 401 and 403 throw `WorldAuthError`.
 
-HTTP 401 and 403 mean the credentials were rejected.
+## Differences from spec section 8 worth a decision (L1 and L2)
 
-## Requests to L1 and L2
-
-- L2: confirm or change the shapes above, return `structuredContent` plus JSON text, and use the first error shape.
-- Differences from spec section 8 that need a decision: `worldId` is on every tool input (the spec rows for `update_node`, `link`, `move` and `propose_canon` omit it) and optional on `import_whiteboard`; `add_node` nests `regionId` inside `node` (the spec lists it beside the node input); `propose_canon` requires `note` (1..2000) where the op's `note` is optional; the `query`, `limit` and `level` bounds are not in the spec.
-- L1: consider moving these tool schemas into `packages/world` (for example `packages/world/src/tools.ts`) so the server and the client import one definition. `world-agents` would then re-export them.
+- `search` returns no world version and `get_world` has it only inside `world`; spec 8 says every tool response includes it.
+- `propose_canon` takes `title`, `targets` and `rationale` and opens no PR; spec 8 lists `target, baseVersion, note` and a PR URL.
+- `import_whiteboard` requires `worldId` and only seeds an empty world; spec 8 says it writes a new world or a draft branch.
+- `add_node` accepts `canon: {status: "proposed"}` (L1's `nodeInputSchema` allows it), which marks a node proposed without a proposal row, so it never reaches the PR flow (spec 3.5).
+- Error codes for bad input differ by tool (`INVALID_INPUT` in `get_region`, `INVALID_OP` elsewhere), and importing into a non-empty world returns `DUPLICATE_ID`.
+- Moving the tool schemas into `packages/world` would let the server and this client import one definition instead of keeping two copies in step.

@@ -357,6 +357,15 @@ describe('openCanonPr', () => {
     expect(error.message).toContain('may have been created anyway');
   });
 
+  it.each([[500], [502], [503]])('reports the branch as possibly created when create-branch answers %i', async (status) => {
+    const gh = github({ 'create-branch': { status, json: { message: 'Server Error' } } });
+    const error = await caught(openCanonPr(proposal, { ...target, getToken: () => TOKEN, fetch: gh.fetch }));
+    expect(error).toMatchObject({ code: 'HTTP_ERROR', step: 'create-branch', status, githubMessage: 'Server Error', branch: 'canon/the-glass-orchard', path: proposal.path });
+    expect(error.calls!.map((c) => c.step)).toEqual(['get-repo', 'get-base-ref', 'create-branch']);
+    expect(error.message).toContain('Branch canon/the-glass-orchard may have been created anyway');
+    expect(gh.calls.map((c) => c.step)).toEqual(['get-repo', 'get-base-ref', 'create-branch']);
+  });
+
   it('does not report a branch for an HTTP refusal of create-branch', async () => {
     const gh = github({ 'create-branch': { status: 403, json: { message: 'Forbidden' } } });
     const error = await caught(openCanonPr(proposal, { ...target, getToken: () => TOKEN, fetch: gh.fetch }));

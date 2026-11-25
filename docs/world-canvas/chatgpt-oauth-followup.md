@@ -1,12 +1,12 @@
 # Follow-up spec for L2: OAuth so ChatGPT can connect
 
-Status: proposed by lane L5 on 2026-11-25 for issue #63. Owner: lane L2 (`apps/world-edge`). Nothing here is built yet. L5 did not change any L2 file.
+Status: proposed by lane L5 on 2026-11-25 for issue #63. Owner: lane L2 (`apps/world-edge`). Checked against L2's branch `agent/claude-cloud/world-edge` at commit 161c054, whose README lists "OAuth for ChatGPT connectors" as not done. Nothing here is built yet. L5 did not change any L2 file.
 
 ## Why
 
-The design L2 was briefed to build for #63 (not yet on any branch, so unconfirmed against code) puts Cloudflare Access in front of the Worker (an Access JWT, or an Access service token sent as `CF-Access-Client-Id` and `CF-Access-Client-Secret`) and checks a static bearer token in `Authorization`. Claude Code and Codex can send both, because both let the user set arbitrary headers from environment variables.
+L2 at 161c054 (`apps/world-edge/src/auth.ts`) authenticates `/mcp` with either a bearer service token, whose SHA-256 hash, name and `harness` are listed in the `MCP_SERVICE_TOKENS` secret, or a Cloudflare Access JWT (`Cf-Access-Jwt-Assertion`) for browsers. Its README suggests an Access Bypass or Service Auth rule on `/mcp`. A 401 carries `WWW-Authenticate: Bearer realm="world-edge"`. Claude Code and Codex can send the bearer token (and Access service-token headers if needed), because both let the user set headers from environment variables.
 
-ChatGPT cannot. Its custom MCP servers support only OAuth, no authentication, or a per-tool mix of the two. OpenAI's auth guide (https://developers.openai.com/plugins/build/auth.md, read 2026-11-25) states that ChatGPT does not support machine-to-machine OAuth grants such as client credentials and cannot present custom API keys. The only credential it ever sends is an OAuth access token it obtained itself, as `Authorization: Bearer <token>`. So under the current design ChatGPT is stopped by Access, and would be rejected by the static-bearer check even past Access. "No authentication" is not acceptable for a server with write tools.
+ChatGPT cannot. Its custom MCP servers support only OAuth, no authentication, or a per-tool mix of the two. OpenAI's auth guide (https://developers.openai.com/plugins/build/auth.md, read 2026-11-25) states that ChatGPT does not support machine-to-machine OAuth grants such as client credentials and cannot present custom API keys. The only credential it ever sends is an OAuth access token it obtained itself, as `Authorization: Bearer <token>`. So with Access on `/mcp` ChatGPT is stopped before the Worker, and with an Access Bypass it reaches the Worker but its OAuth token is not a known service token, so `authenticate` returns 401. "No authentication" is not acceptable for a server with write tools.
 
 Claude.ai and Claude Desktop custom connectors have the same shape of problem: they connect from Anthropic's cloud and default to OAuth. The same work fixes them.
 
@@ -79,16 +79,16 @@ Not recommended without a test: Cloudflare Access "Managed OAuth" (listed as bet
 
 ### R7. Keep the static bearer path for local agents
 
-Claude Code and Codex work today with the static bearer. Keep that working, choosing one of:
+Claude Code and Codex work with the per-client service tokens L2 already has. Keep that working, choosing one of:
 
-- (a) accept either a valid OAuth token or the static bearer on `/mcp`, checking the static token with a constant-time compare and stamping `harness` from a per-token mapping; or
+- (a) accept either a valid OAuth token or a service token on `/mcp`. This is closest to L2's current `authenticate`, which already compares token hashes in constant time and stamps `harness` from `MCP_SERVICE_TOKENS`; the OAuth check would be a third branch; or
 - (b) serve the static-bearer path on a separate hostname or route that stays behind Access with a Service Auth policy.
 
 Option (b) keeps the public OAuth surface free of long-lived secrets and is L5's preference. Either way, never accept the static token as an OAuth token or the reverse.
 
 ### R8. Tool annotations
 
-Set `readOnlyHint: true` on `get_world`, `get_region` and `search`. Leave the write tools (`add_node`, `update_node`, `link`, `move`, `propose_canon`, `layout_region`, `import_whiteboard`) without `readOnlyHint`, so ChatGPT asks the user to confirm each write and Codex's `default_tools_approval_mode = "writes"` prompts for them. Return results in `structuredContent` and also as JSON text, which is what `@starlight-agent-canvas/world-agents` reads.
+Already done at 161c054: `src/mcp.ts` marks `get_world`, `get_region` and `search` with `readOnlyHint: true` and every write tool with `readOnlyHint: false`, so ChatGPT asks the user to confirm each write and Codex's `default_tools_approval_mode = "writes"` prompts for them. Keep it that way. Results are JSON text today, which `@starlight-agent-canvas/world-agents` reads; adding the same object as `structuredContent` is optional.
 
 ### R9. Secrets and config (names only, values never in git)
 

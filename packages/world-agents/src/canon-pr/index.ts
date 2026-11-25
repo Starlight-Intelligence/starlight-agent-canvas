@@ -15,6 +15,12 @@ export {
   type CanonProposalRequestInput,
 } from './request.js';
 export {
+  canonProposalRequestFromRow,
+  canonProposalRowSchema,
+  type CanonProposalRow,
+  type CanonProposalRowOptions,
+} from './from-row.js';
+export {
   buildCanonProposal,
   inlineMarkdown,
   slugify,

@@ -1,4 +1,4 @@
-import { CanonGuardError, CanonPrError, type CanonPrErrorCode, type CanonPrStep, type ExecutedCall } from './errors.js';
+import { CanonGuardError, CanonPrError, type CanonPrErrorCode, type CanonPrErrorDetails, type CanonPrStep, type ExecutedCall } from './errors.js';
 import {
   assertProposalPathAllowed,
   CANON_BRANCH_PATTERN,
@@ -270,9 +270,16 @@ export async function openCanonPr(proposal: CanonProposalFile, options: OpenCano
     return { status, data };
   };
 
-  const httpError = (step: PlannedCall['step'], status: number, data: Record<string, unknown>, code: CanonPrErrorCode = 'HTTP_ERROR', note = ''): never => {
+  const httpError = (
+    step: PlannedCall['step'],
+    status: number,
+    data: Record<string, unknown>,
+    code: CanonPrErrorCode = 'HTTP_ERROR',
+    note = '',
+    leftover: Pick<CanonPrErrorDetails, 'branch' | 'path' | 'calls'> = {},
+  ): never => {
     const githubMessage = typeof data.message === 'string' ? redact(data.message) : undefined;
-    throw new CanonPrError(code, step, `GitHub ${step} failed with ${status}${githubMessage ? `: ${githubMessage}` : ''}${note}`, { status, githubMessage });
+    throw new CanonPrError(code, step, `GitHub ${step} failed with ${status}${githubMessage ? `: ${githubMessage}` : ''}${note}`, { status, githubMessage, ...leftover });
   };
   const ok = (status: number) => status >= 200 && status < 300;
 
@@ -310,6 +317,12 @@ export async function openCanonPr(proposal: CanonProposalFile, options: OpenCano
   }
   if (created.status === 422) {
     httpError('create-branch', 422, created.data, 'BRANCH_EXISTS', `. Branch ${fixed.branch} already exists; it is never reused. Pick another slug.`);
+  }
+  if (created.status >= 500) {
+    // A server error does not prove the ref was not created.
+    httpError('create-branch', created.status, created.data, 'HTTP_ERROR',
+      `. Branch ${fixed.branch} may have been created anyway; it is never reused. Check for it and retry with a different slug.`,
+      { branch: fixed.branch, path: fixed.path, calls: [...calls] });
   }
   if (!ok(created.status)) httpError('create-branch', created.status, created.data);
 
