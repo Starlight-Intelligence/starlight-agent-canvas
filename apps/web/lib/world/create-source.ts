@@ -20,7 +20,10 @@ export async function createWorldSource(worldId: string): Promise<WorldSource> {
     throw new Error(body?.error ?? `Could not load world ${worldId} (HTTP ${res.status}).`);
   }
   const graph = parseWorldGraph(await res.json());
-  return new LocalWorldSource(graph, { persistUrl: `/api/worlds/${encodeURIComponent(worldId)}/ops` });
+  return new LocalWorldSource(graph, {
+    persistUrl: `/api/worlds/${encodeURIComponent(worldId)}/ops`,
+    reloadUrl: `/api/worlds/${encodeURIComponent(worldId)}`,
+  });
 }
 
 export const STRESS_DEFAULT_NODES = 10_000;

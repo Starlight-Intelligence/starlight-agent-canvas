@@ -190,3 +190,58 @@ describe('RemoteWorldSource', () => {
     expect(source.activity()[0].status).toBe('confirmed');
   });
 });
+
+describe('review fixes', () => {
+  it('orders a 100k-node timeline quickly', async () => {
+    const { timelineLayout, timelineNodes } = await import('../layouts');
+    const g = graphOf(100_000);
+    const nodes = timelineNodes(g.nodes, g.edges);
+    const t0 = performance.now();
+    const out = timelineLayout(nodes, g.edges);
+    expect(out).toHaveLength(nodes.length);
+    expect(performance.now() - t0).toBeLessThan(3000);
+  });
+
+  it('keeps an Unplaced cluster bounded by its own nodes for regionless worlds', async () => {
+    const g = graphOf(200);
+    const regionless = { ...g, world: { ...g.world, regions: [] }, nodes: g.nodes.map((n) => ({ ...n, regionId: null })) } as WorldGraph;
+    const clusters = await new LocalWorldSource(regionless).getClusters();
+    expect(clusters).toHaveLength(1);
+    expect(clusters[0].regionId).toBeNull();
+    expect(clusters[0].total).toBe(200);
+    for (const n of regionless.nodes) {
+      expect(n.position.x).toBeGreaterThanOrEqual(clusters[0].bounds.x);
+      expect(n.position.y).toBeGreaterThanOrEqual(clusters[0].bounds.y);
+    }
+  });
+
+  it('reloads the authoritative graph after the server rejects a batch', async () => {
+    const server = graphOf(50);
+    const newer = { ...server, nodes: server.nodes.map((n) => (n.id === 'n_gen_3' ? { ...n, title: 'Saved in another tab', version: 2 } : n)) };
+    const fetchImpl = vi.fn(async (url: string) =>
+      url.endsWith('/ops')
+        ? new Response(JSON.stringify({ ok: false, error: { code: 'STALE_VERSION', message: 'stale' } }), { status: 409 })
+        : new Response(JSON.stringify(newer), { status: 200 }),
+    );
+    const source = new LocalWorldSource(server, { persistUrl: '/api/worlds/stress/ops', reloadUrl: '/api/worlds/stress', fetchImpl: fetchImpl as unknown as typeof fetch });
+    const out = await source.applyOps([{ op: 'updateNode', id: 'n_gen_3', baseVersion: 1, patch: { title: 'Mine' } }]);
+    expect(out.ok).toBe(false);
+    const node = await source.getNode('n_gen_3');
+    expect(node?.title).toBe('Saved in another tab');
+    expect(node?.version).toBe(2);
+  });
+
+  it('remote getNode loads the area around a search hit on a cache miss', async () => {
+    const { RemoteWorldSource } = await import('../remote-source');
+    const g = graphOf(20);
+    const target = g.nodes[7];
+    const fetchImpl = vi.fn(async (url: string) =>
+      url.endsWith('/search')
+        ? new Response(JSON.stringify([{ id: target.id, kind: target.kind, title: target.title, summary: '', position: target.position, regionId: target.regionId }]))
+        : new Response(JSON.stringify({ nodes: [target], edges: [] })),
+    );
+    const source = new RemoteWorldSource('https://worker.example', 'demo', fetchImpl as unknown as typeof fetch);
+    const [hit] = await source.search('x');
+    expect((await source.getNode(hit.id))?.id).toBe(target.id);
+  });
+});

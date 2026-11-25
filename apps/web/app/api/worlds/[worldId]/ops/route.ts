@@ -10,6 +10,17 @@ export const dynamic = 'force-dynamic';
  */
 export async function POST(request: Request, context: { params: Promise<{ worldId: string }> }) {
   const { worldId } = await context.params;
+  // A page on another origin must not edit the local world. A text/plain JSON
+  // body needs no CORS preflight, so check the origin explicitly, as the
+  // checkpoint and website routes do, and require a JSON content type.
+  const origin = request.headers.get('origin');
+  const expectedOrigin = `${new URL(request.url).protocol}//${request.headers.get('host')?.toLowerCase()}`;
+  if (request.headers.get('sec-fetch-site') === 'cross-site' || (origin && origin !== expectedOrigin)) {
+    return NextResponse.json({ ok: false, error: { code: 'INVALID_OP', message: 'World edits require the workspace origin.' } }, { status: 403 });
+  }
+  if (!request.headers.get('content-type')?.toLowerCase().startsWith('application/json')) {
+    return NextResponse.json({ ok: false, error: { code: 'INVALID_OP', message: 'World edits must be sent as application/json.' } }, { status: 415 });
+  }
   const body = (await request.json().catch(() => null)) as { ops?: unknown } | null;
   if (!body || !Array.isArray(body.ops)) {
     return NextResponse.json({ ok: false, error: { code: 'INVALID_OP', message: 'Body must be { ops: GraphOp[] }.' } }, { status: 400 });

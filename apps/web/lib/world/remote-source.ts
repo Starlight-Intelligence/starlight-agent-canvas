@@ -30,6 +30,8 @@ export class RemoteWorldSource implements WorldSource {
   private listeners = new Set<(event: WorldEvent) => void>();
   private log: ActivityEntry[] = [];
   private nodes = new Map<string, WorldNode>();
+  /** Positions learned from search hits, so a cache miss can load the right area. */
+  private hitPositions = new Map<string, { x: number; y: number }>();
   private socket: WebSocket | null = null;
 
   constructor(
@@ -89,10 +91,23 @@ export class RemoteWorldSource implements WorldSource {
   }
 
   async search(query: string, limit = 12): Promise<SearchHit[]> {
-    return this.call<SearchHit[]>('search', { query, limit });
+    const hits = await this.call<SearchHit[]>('search', { query, limit });
+    for (const h of hits) this.hitPositions.set(h.id, h.position);
+    return hits;
   }
 
   async getNode(id: string): Promise<WorldNode | null> {
+    const cached = this.nodes.get(id);
+    if (cached) return cached;
+    // Cache miss (search hit or deep link outside loaded tiles): load the area
+    // around a known position, else ask the worker for that node's region by id.
+    const at = this.hitPositions.get(id);
+    try {
+      if (at) await this.getRegion({ bounds: { x: at.x - 512, y: at.y - 512, w: 1024, h: 1024 } });
+      else await this.call<{ nodes: WorldNode[] }>('get_region', { nodeId: id }).then((r) => this.remember(r.nodes ?? []));
+    } catch {
+      return null;
+    }
     return this.nodes.get(id) ?? null;
   }
 

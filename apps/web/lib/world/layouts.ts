@@ -37,16 +37,17 @@ export function timelineOrder(nodes: readonly WorldNode[], edges: readonly World
     next.set(a, [...(next.get(a) ?? []), b]);
     indeg.set(b, (indeg.get(b) ?? 0) + 1);
   }
-  const ready = byPos.filter((n) => indeg.get(n.id) === 0).map((n) => n.id);
+  // Min-heap on positional rank: O((n + e) log n), so 100k-node worlds stay responsive.
+  const ready = new RankHeap();
+  for (const n of byPos) if (indeg.get(n.id) === 0) ready.push(n.id, rank.get(n.id) ?? 0);
   const out: string[] = [];
-  while (ready.length) {
-    ready.sort((x, y) => (rank.get(x) ?? 0) - (rank.get(y) ?? 0));
-    const id = ready.shift()!;
+  while (ready.size) {
+    const id = ready.pop();
     out.push(id);
     for (const b of next.get(id) ?? []) {
       const d = (indeg.get(b) ?? 0) - 1;
       indeg.set(b, d);
-      if (d === 0) ready.push(b);
+      if (d === 0) ready.push(b, rank.get(b) ?? 0);
     }
   }
   const placed = new Set(out);
@@ -138,4 +139,52 @@ export function nearestInDirection(
     }
   }
   return best;
+}
+
+class RankHeap {
+  private ids: string[] = [];
+  private ranks: number[] = [];
+
+  get size(): number {
+    return this.ids.length;
+  }
+
+  push(id: string, rank: number): void {
+    this.ids.push(id);
+    this.ranks.push(rank);
+    let i = this.ids.length - 1;
+    while (i > 0) {
+      const parent = (i - 1) >> 1;
+      if (this.ranks[parent] <= this.ranks[i]) break;
+      this.swap(i, parent);
+      i = parent;
+    }
+  }
+
+  pop(): string {
+    const top = this.ids[0];
+    const lastId = this.ids.pop()!;
+    const lastRank = this.ranks.pop()!;
+    if (this.ids.length) {
+      this.ids[0] = lastId;
+      this.ranks[0] = lastRank;
+      let i = 0;
+      for (;;) {
+        const l = i * 2 + 1;
+        const r = l + 1;
+        let m = i;
+        if (l < this.ranks.length && this.ranks[l] < this.ranks[m]) m = l;
+        if (r < this.ranks.length && this.ranks[r] < this.ranks[m]) m = r;
+        if (m === i) break;
+        this.swap(i, m);
+        i = m;
+      }
+    }
+    return top;
+  }
+
+  private swap(a: number, b: number): void {
+    [this.ids[a], this.ids[b]] = [this.ids[b], this.ids[a]];
+    [this.ranks[a], this.ranks[b]] = [this.ranks[b], this.ranks[a]];
+  }
 }

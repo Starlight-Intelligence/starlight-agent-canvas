@@ -48,6 +48,8 @@ const RELATION_TEXT: Record<Relation, string> = {
 };
 
 const MAX_TILES = 64;
+/** Flow id suffix for the cluster of nodes outside every region. */
+const UNPLACED = '__unplaced';
 const STRUCTURAL: ReadonlySet<Relation> = new Set<Relation>(['rules', 'bonded-to', 'part-of', 'member-of', 'precedes', 'follows', 'appears-in', 'located-at', 'canon-of', 'contradicts']);
 const DEFAULT_W = 240;
 const DEFAULT_H = 120;
@@ -395,9 +397,8 @@ function WorldCanvasInner({ worldId, stressNodes }: { worldId: string; stressNod
       }));
     }
     return clusters
-      .filter((c) => c.regionId)
       .map((c) => ({
-        id: `region:${c.regionId}`,
+        id: `region:${c.regionId ?? UNPLACED}`,
         type: 'region',
         position: { x: c.bounds.x, y: c.bounds.y },
         width: c.bounds.w,
@@ -541,7 +542,7 @@ function WorldCanvasInner({ worldId, stressNodes }: { worldId: string; stressNod
   const onPick = useCallback((hit: SearchHit) => void jumpTo(hit.id), [jumpTo]);
 
   const enterRegion = useCallback((regionId: string) => {
-    const c = clusters.find((x) => x.regionId === regionId);
+    const c = clusters.find((x) => (x.regionId ?? UNPLACED) === regionId);
     if (!c) return;
     setView('graph');
     requestAnimationFrame(() => void rf.fitBounds(rect(c.bounds), { padding: 0.05, duration }));

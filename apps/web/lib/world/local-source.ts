@@ -1,4 +1,4 @@
-import { applyOps as applyGraphOps, boundsIntersect, nodeBounds, regionAt, tileKeysForBounds } from '@starlight-agent-canvas/world';
+import { applyOps as applyGraphOps, boundsIntersect, nodeBounds, parseWorldGraph, regionAt, tileKeysForBounds } from '@starlight-agent-canvas/world';
 import type { NodeKind, OpError, WorldGraph, WorldNode } from '@starlight-agent-canvas/world';
 import { TileIndex } from './tile-index';
 import { regionTint } from './tints';
@@ -23,6 +23,12 @@ export interface LocalWorldSourceOptions {
    * the server copy. Without it, edits live only in this tab.
    */
   persistUrl?: string;
+  /**
+   * Optional URL returning the authoritative world document. After the server
+   * rejects a batch (for example STALE_VERSION because another tab saved
+   * first), the source reloads from here instead of restoring its own snapshot.
+   */
+  reloadUrl?: string;
   /** Harness stamped on edits made in this tab. */
   harness?: string;
   fetchImpl?: typeof fetch;
@@ -82,6 +88,9 @@ export class LocalWorldSource implements WorldSource {
         byKind: {},
       });
     });
+    // Nodes outside every region form an "Unplaced" cluster bounded by those
+    // nodes only, so regionless worlds still show something at cluster zoom.
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
     for (const node of this.graph.nodes) {
       const id = node.regionId && byRegion.has(node.regionId) ? node.regionId : (regionAt(regions, node.position)?.id ?? null);
       let cluster = byRegion.get(id);
@@ -89,9 +98,16 @@ export class LocalWorldSource implements WorldSource {
         cluster = { regionId: null, title: 'Unplaced', bounds: this.index.bounds, color: '#8b8b95', total: 0, byKind: {} };
         byRegion.set(null, cluster);
       }
+      if (id === null) {
+        const b = nodeBounds(node);
+        x0 = Math.min(x0, b.x); y0 = Math.min(y0, b.y);
+        x1 = Math.max(x1, b.x + Math.max(b.w, 240)); y1 = Math.max(y1, b.y + Math.max(b.h, 120));
+      }
       cluster.total += 1;
       cluster.byKind[node.kind] = (cluster.byKind[node.kind] ?? 0) + 1;
     }
+    const unplaced = byRegion.get(null);
+    if (unplaced && Number.isFinite(x0)) unplaced.bounds = { x: x0 - 64, y: y0 - 64, w: x1 - x0 + 128, h: y1 - y0 + 128 };
     return [...byRegion.values()];
   }
 
@@ -170,6 +186,16 @@ export class LocalWorldSource implements WorldSource {
     this.emit({ type: 'activity', entry });
   }
 
+  private async fetchAuthoritative(): Promise<WorldGraph | null> {
+    if (!this.options.reloadUrl) return null;
+    try {
+      const res = await (this.options.fetchImpl ?? fetch)(this.options.reloadUrl, { cache: 'no-store' });
+      return res.ok ? parseWorldGraph(await res.json()) : null;
+    } catch {
+      return null;
+    }
+  }
+
   async applyOps(ops: unknown[], harness = this.options.harness ?? 'human'): Promise<OpOutcome> {
     const before = this.graph;
     const titleOf = (id: string) => this.index.nodesById.get(id)?.title;
@@ -213,8 +239,11 @@ export class LocalWorldSource implements WorldSource {
         error = { code: 'INVALID_OP', message: `Could not reach the server: ${err instanceof Error ? err.message : String(err)}` };
       }
       if (error) {
-        // Roll back only when no newer batch landed on top of this one.
+        // Roll back only when no newer batch landed on top of this one, then
+        // reconcile with the server so a retry is based on its versions.
         if (this.graph === result.graph) this.setGraph(before);
+        const fresh = await this.fetchAuthoritative();
+        if (fresh) this.setGraph(fresh);
         this.emit({
           type: 'changed',
           version: this.graph.world.version,

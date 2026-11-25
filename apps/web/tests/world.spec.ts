@@ -116,4 +116,14 @@ test.describe('world canvas', () => {
     expect(transition.split(',').every((d) => parseFloat(d) < 0.001)).toBe(true);
     await context.close();
   });
+
+  test('the ops route refuses cross-origin and non-JSON writes', async ({ request }) => {
+    const op = { ops: [{ op: 'updateNode', id: 'n_gen_7', baseVersion: 1, patch: { title: 'Forged' } }] };
+    const cross = await request.post('/api/worlds/demo/ops', { headers: { origin: 'https://evil.example', 'content-type': 'application/json' }, data: JSON.stringify(op) });
+    expect(cross.status()).toBe(403);
+    const plain = await request.post('/api/worlds/demo/ops', { headers: { 'content-type': 'text/plain' }, data: JSON.stringify(op) });
+    expect(plain.status()).toBe(415);
+    const world = await (await request.get('/api/worlds/demo')).json();
+    expect(world.nodes.find((n: { id: string }) => n.id === 'n_gen_7').title).not.toBe('Forged');
+  });
 });

@@ -46,17 +46,40 @@ export async function readWorld(worldId: string): Promise<WorldGraph> {
   return graph;
 }
 
-export async function applyWorldOps(worldId: string, ops: unknown[], harness: string): Promise<ApplyResult> {
-  const graph = await readWorld(worldId);
-  const safeHarness = /^[a-z][a-z0-9-]{0,63}$/.test(harness) ? harness : 'human';
-  const result = applyOps(graph, ops, { actor: { harness: safeHarness, at: new Date().toISOString() } });
-  if (!result.ok) return result;
-  cache.set(worldId, result.graph);
-  if (process.env.STARLIGHT_WORLD_PERSIST === '1') {
-    const file = fileFor(worldId);
-    const tmp = `${file}.${process.pid}.tmp`;
-    await fs.writeFile(tmp, `${JSON.stringify(result.graph, null, 2)}\n`, 'utf8');
-    await fs.rename(tmp, file);
-  }
-  return result;
+const queues = new Map<string, Promise<unknown>>();
+
+/** Runs `task` after every earlier task for the same world has settled. */
+function serialized<T>(worldId: string, task: () => Promise<T>): Promise<T> {
+  const previous = queues.get(worldId) ?? Promise.resolve();
+  const run = previous.then(task, task);
+  const tail = run.catch(() => undefined);
+  queues.set(worldId, tail);
+  void tail.then(() => {
+    if (queues.get(worldId) === tail) queues.delete(worldId);
+  });
+  return run;
+}
+
+let tmpSeq = 0;
+
+/**
+ * Read, apply and write as one transaction per world. The cached graph is
+ * replaced only after the write succeeds, so a failed write leaves the server
+ * agreeing with the browser that rolled back.
+ */
+export function applyWorldOps(worldId: string, ops: unknown[], harness: string): Promise<ApplyResult> {
+  return serialized(worldId, async () => {
+    const graph = await readWorld(worldId);
+    const safeHarness = /^[a-z][a-z0-9-]{0,63}$/.test(harness) ? harness : 'human';
+    const result = applyOps(graph, ops, { actor: { harness: safeHarness, at: new Date().toISOString() } });
+    if (!result.ok) return result;
+    if (process.env.STARLIGHT_WORLD_PERSIST === '1') {
+      const file = fileFor(worldId);
+      const tmp = `${file}.${process.pid}.${++tmpSeq}.tmp`;
+      await fs.writeFile(tmp, `${JSON.stringify(result.graph, null, 2)}\n`, 'utf8');
+      await fs.rename(tmp, file);
+    }
+    cache.set(worldId, result.graph);
+    return result;
+  });
 }
