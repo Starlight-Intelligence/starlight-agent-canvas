@@ -24,7 +24,11 @@ export const canonProposalRowSchema = z.object({
 export type CanonProposalRow = z.infer<typeof canonProposalRowSchema>;
 
 export interface CanonProposalRowOptions {
-  /** The world the row belongs to. The row itself does not carry it. */
+  /**
+   * The world the row belongs to. The row itself does not carry it, so the
+   * caller must pass the id of the world it read the row from; nodes are then
+   * resolved by id in that world.
+   */
   worldId: string;
 }
 
@@ -36,9 +40,12 @@ function firstIssue(error: z.ZodError): string {
 /**
  * Turns an L2 canon proposal row into a canon proposal request for
  * buildCanonProposal. The date is the UTC date of `createdAt`. A null actor is
- * left out. Throws CanonProposalError: UNSUPPORTED_TARGET when the row names
+ * left out. Throws CanonProposalError: NOT_OPEN when the row is not `open` or
+ * already has a PR URL, UNSUPPORTED_TARGET when the row names
  * edges (edge proposals are not supported here yet, and are never dropped
  * silently), INVALID_REQUEST when the row or the resulting request is invalid.
+ * buildCanonProposal can still throw CanonGuardError later, for example for a
+ * title that names CANON_LOCKED.
  */
 export function canonProposalRequestFromRow(row: unknown, options: CanonProposalRowOptions): CanonProposalRequest {
   const parsedRow = canonProposalRowSchema.safeParse(row);
@@ -46,6 +53,12 @@ export function canonProposalRequestFromRow(row: unknown, options: CanonProposal
     throw new CanonProposalError('INVALID_REQUEST', `Invalid canon proposal row at ${firstIssue(parsedRow.error)}`);
   }
   const r = parsedRow.data;
+  if (r.status !== 'open' || r.prUrl !== null) {
+    throw new CanonProposalError(
+      'NOT_OPEN',
+      `Canon proposal ${r.id} is not open (status ${JSON.stringify(r.status)}${r.prUrl === null ? '' : ', it already has a PR'}); refusing to build a second PR.`,
+    );
+  }
   if (r.edgeIds.length > 0) {
     throw new CanonProposalError(
       'UNSUPPORTED_TARGET',

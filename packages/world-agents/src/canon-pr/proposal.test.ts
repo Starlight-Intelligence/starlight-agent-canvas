@@ -411,7 +411,7 @@ describe('input validation', () => {
 
   it.each([
     ['empty nodeIds', { nodeIds: [] }],
-    ['too many nodeIds', { nodeIds: Array.from({ length: 51 }, (_, i) => `n${i}`) }],
+    ['too many nodeIds', { nodeIds: Array.from({ length: 101 }, (_, i) => `n${i}`) }],
     ['duplicate nodeIds', { nodeIds: ['n_orchard', 'n_orchard'] }],
     ['bad node id', { nodeIds: ['../x'] }],
     ['bad world id', { worldId: '../x' }],

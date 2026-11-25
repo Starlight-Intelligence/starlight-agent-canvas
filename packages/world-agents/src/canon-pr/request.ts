@@ -3,7 +3,8 @@ import { entityIdSchema, harnessSchema, LIMITS, worldIdSchema } from '@starlight
 
 export const CANON_PROPOSAL_LIMITS = {
   titleMax: LIMITS.titleMax,
-  nodesMax: 50,
+  /** Matches L2's 100 targets per proposal. */
+  nodesMax: 100,
   rationaleMax: 4_000,
   slugInputMax: 200,
   slugMax: 60,

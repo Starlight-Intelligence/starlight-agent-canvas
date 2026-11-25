@@ -428,6 +428,12 @@ describe('outputs match L2', () => {
     expect(result.nodes[0]!.version).toBe(2);
   });
 
+  it('rejects a get_region result without truncated', async () => {
+    const { truncated: _omit, ...withoutTruncated } = { ...regionBase, level: 'card' as const, clusters: [], nodes: [card], edges: [edgeSummary] };
+    const { transport } = mockTransport(withoutTruncated);
+    await expect(createWorldClient({ transport, worldId: 'arcanea' }).getRegion({ regionId: 'r_core' })).rejects.toBeInstanceOf(WorldClientValidationError);
+  });
+
   it('accepts the layout_region no-op result (seq 0, moved 0)', async () => {
     const noop = { ok: true, version: 7, seq: 0, nodes: [], edges: [], removedNodes: [], removedEdges: [], proposals: [], moved: 0 };
     const { transport } = mockTransport(noop);

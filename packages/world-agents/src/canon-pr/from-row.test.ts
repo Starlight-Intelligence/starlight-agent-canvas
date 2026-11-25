@@ -50,6 +50,12 @@ describe('canonProposalRequestFromRow', () => {
     });
   });
 
+  it('refuses a row that is not open or already has a PR', () => {
+    expect(codeOf(() => canonProposalRequestFromRow({ ...row, status: 'merged' }, { worldId: 'testland' }))).toBe('NOT_OPEN');
+    expect(codeOf(() => canonProposalRequestFromRow({ ...row, status: 'closed' }, { worldId: 'testland' }))).toBe('NOT_OPEN');
+    expect(codeOf(() => canonProposalRequestFromRow({ ...row, prUrl: 'https://github.com/o/r/pull/1' }, { worldId: 'testland' }))).toBe('NOT_OPEN');
+  });
+
   it('leaves out a null actor', () => {
     expect(canonProposalRequestFromRow({ ...row, actor: null }, { worldId: 'testland' }).proposer).toEqual({ harness: 'claude' });
   });
@@ -103,7 +109,7 @@ describe('canonProposalRequestFromRow', () => {
     ['an empty actor', { ...row, actor: '' }],
     ['no node ids', { ...row, nodeIds: [] }],
     ['duplicate node ids', { ...row, nodeIds: ['n_a', 'n_a'] }],
-    ['more than 50 node ids (L2 allows 100 targets)', { ...row, nodeIds: Array.from({ length: 51 }, (_, i) => `n_${i}`) }],
+    ['more than 100 node ids (L2 allows 100 targets)', { ...row, nodeIds: Array.from({ length: 101 }, (_, i) => `n_${i}`) }],
     ['a blank title', { ...row, title: '   ' }],
     ['a blank rationale', { ...row, rationale: ' ' }],
   ])('refuses a row that makes an invalid request: %s', (_label, bad) => {

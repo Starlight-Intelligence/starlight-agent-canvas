@@ -6,7 +6,7 @@ The client's copy of this contract is `packages/world-agents/src/client/tools.ts
 
 ## Transport
 
-- MCP Streamable HTTP, JSON-RPC 2.0, `POST /mcp`. L2's handler (`createMcpHandler` from the Agents SDK) is stateless and sends no `Mcp-Session-Id`; the client works with or without one.
+- MCP Streamable HTTP, JSON-RPC 2.0, `POST /mcp`. L2's README describes its handler (`createMcpHandler` from the Agents SDK) as stateless, so expect no `Mcp-Session-Id`; the client works with or without one.
 - Auth: `Authorization: Bearer <service token>` (see [connect-agents.md](./connect-agents.md)). A 401 body is `{error: {code: "UNAUTHENTICATED", message}}`.
 - The client sends `initialize` (protocol version `2025-11-25`, then whatever version the server negotiates), `notifications/initialized`, then `tools/call`. It accepts `application/json` or `text/event-stream` responses.
 - The server URL must be https (http only for `localhost`, `127.0.0.1` or `[::1]`) and must have no query string or fragment.
@@ -48,7 +48,7 @@ Unknown extra keys on objects are ignored, so additive server fields are safe.
 
 `get_region` by level: `cluster` returns per-tile `clusters` and empty `nodes` and `edges`; `card` returns node cards (`{id, kind, title, tags, position, size?, regionId, layer, canon, version, thumbnail?}`) and edge summaries (`{id, from, to, relation, label?, canon, version}`); `full` returns whole `WorldNode` and `WorldEdge` objects. Cards carry `version`, so agents can take `baseVersion` from them, but they have no `summary` or `body`: read at `full` before editing text. If `truncated` is true, more nodes matched than `limit`.
 
-`propose_canon` does not open a PR. It marks the targets `proposed` and stores a proposal row (`{id, title, nodeIds, edgeIds, rationale, status: "open", prUrl: null, worldVersion, harness, actor, createdAt}`, readable at `GET /agents/world-agent/<worldId>/proposals?status=open`). `canonProposalRequestFromRow` in `world-agents` turns such a row into input for `openCanonPr`, which opens the draft PR.
+`propose_canon` does not open a PR. It marks the targets `proposed` and stores a proposal row (`{id, title, nodeIds, edgeIds, rationale, status: "open", prUrl: null, worldVersion, harness, actor, createdAt}`, readable at `GET /agents/world-agent/<worldId>/proposals?status=open`). `canonProposalRequestFromRow` in `world-agents` turns such a row into input for `openCanonPr`, which opens the draft PR. As of 161c054 nothing runs this automatically, and rows that name edges are refused (`UNSUPPORTED_TARGET`) because canon-pr handles nodes only.
 
 ## Errors
 
@@ -62,7 +62,9 @@ The client throws `WorldToolError` with `code`, `message`, the optional `opIndex
 
 Codes seen in L2: L1's `OpErrorCode` values (`INVALID_OP`, `INVALID_CONTEXT`, `NOT_FOUND`, `DUPLICATE_ID`, `STALE_VERSION`, `CANON_FORBIDDEN`, `CANON_LOCKED`, `INVALID_REFERENCE`) plus `INVALID_INPUT` and `BOUNDS_TOO_LARGE` from `get_region`. The client also understands a flat `{code, message, ...}` payload, a JSON-RPC `error` whose `data` is that flat shape, and a plain-text `CODE: message` when `CODE` is one of the codes above or `UNAUTHORIZED` (a text error carries no version details).
 
-HTTP 401 and 403 throw `WorldAuthError`.
+Input that fails the server's own zod schema is rejected by the MCP SDK before L2's code runs; it arrives as an error result with text `Input validation error: ...` and becomes code `TOOL_ERROR`. The client's strict schemas normally catch such input first.
+
+HTTP 401 and 403 throw `WorldAuthError`. Other non-2xx responses, such as L2's `AUTH_UNAVAILABLE` (a 5xx when Access keys cannot be loaded), throw `WorldTransportError` with the status, and the server's code appears only in the message.
 
 ## Differences from spec section 8 worth a decision (L1 and L2)
 

@@ -4,7 +4,7 @@ Status: proposed by lane L5 on 2026-11-25 for issue #63. Owner: lane L2 (`apps/w
 
 ## Why
 
-L2 at 161c054 (`apps/world-edge/src/auth.ts`) authenticates `/mcp` with either a bearer service token, whose SHA-256 hash, name and `harness` are listed in the `MCP_SERVICE_TOKENS` secret, or a Cloudflare Access JWT (`Cf-Access-Jwt-Assertion`) for browsers. Its README suggests an Access Bypass or Service Auth rule on `/mcp`. A 401 carries `WWW-Authenticate: Bearer realm="world-edge"`. Claude Code and Codex can send the bearer token (and Access service-token headers if needed), because both let the user set headers from environment variables.
+L2 at 161c054 (`apps/world-edge/src/auth.ts`) authenticates `/mcp` with either a bearer service token, whose SHA-256 hash, name and `harness` are listed in the `MCP_SERVICE_TOKENS` secret, or a Cloudflare Access JWT (`Cf-Access-Jwt-Assertion`) for browsers. Its README suggests an Access Bypass or Service Auth rule on `/mcp`. With Service Auth, `authenticate` accepts the Access service-token JWT alone (no bearer) as `harness: human`, because `verifyAccessJwt` takes `common_name` as the actor; see R7. A 401 carries `WWW-Authenticate: Bearer realm="world-edge"`. Claude Code and Codex can send the bearer token (and Access service-token headers if needed), because both let the user set headers from environment variables.
 
 ChatGPT cannot. Its custom MCP servers support only OAuth, no authentication, or a per-tool mix of the two. OpenAI's auth guide (https://developers.openai.com/plugins/build/auth.md, read 2026-11-25) states that ChatGPT does not support machine-to-machine OAuth grants such as client credentials and cannot present custom API keys. The only credential it ever sends is an OAuth access token it obtained itself, as `Authorization: Bearer <token>`. So with Access on `/mcp` ChatGPT is stopped before the Worker, and with an Access Bypass it reaches the Worker but its OAuth token is not a known service token, so `authenticate` returns 401. "No authentication" is not acceptable for a server with write tools.
 
@@ -32,7 +32,7 @@ All URLs below assume one stable public origin, written `https://<host>`. Use a 
 }
 ```
 
-`resource` must be exactly the URL users paste into ChatGPT, because ChatGPT sends it verbatim as the `resource` parameter. Because the resource has a path, also serve the same document at `/.well-known/oauth-protected-resource/mcp` (the path-specific location in RFC 9728 section 3.1); `@cloudflare/workers-oauth-provider` handles this for you.
+Use a custom domain for this; L2's README notes that a custom domain also needs `allowedHostnames` and `allowedOriginHostnames` passed to `createMcpHandler` in `src/mcp.ts`. `resource` must be exactly the URL users paste into ChatGPT, because ChatGPT sends it verbatim as the `resource` parameter. Because the resource has a path, also serve the same document at `/.well-known/oauth-protected-resource/mcp` (the path-specific location in RFC 9728 section 3.1); `@cloudflare/workers-oauth-provider` handles this for you.
 
 ### R3. Authorization server metadata (RFC 8414)
 
@@ -65,7 +65,7 @@ Serve `GET /.well-known/oauth-authorization-server` (and ideally `/.well-known/o
 
 ### R5. Redirect allowlist
 
-Allow `https://chatgpt.com/connector_platform_oauth_redirect` (the stable URI ChatGPT uses when R4.1 holds). If the stable URI is not in use, the URI is `https://chatgpt.com/connector/oauth/{callback_id}`. The exact value is shown on the ChatGPT server's management page at setup; copy it from there. Add Claude's callback (`https://claude.ai/api/mcp/auth_callback`, per Anthropic's connector docs as read by our research agent) if Claude.ai connectors should work too. Loopback redirects are needed only if Claude Code or Codex users switch from bearer to OAuth. Allow both `http://localhost:<any port>/callback` and `http://127.0.0.1:<any port>/callback` (Claude Code uses `localhost` by default per https://code.claude.com/docs/en/mcp; Codex uses `http://127.0.0.1/callback`, with a callback id path suffix when issuer identification is not advertised, per https://developers.openai.com/codex/mcp).
+Allow `https://chatgpt.com/connector_platform_oauth_redirect` (the stable URI ChatGPT uses when R4.1 holds). If the stable URI is not in use, the URI is `https://chatgpt.com/connector/oauth/{callback_id}`. The exact value is shown on the ChatGPT server's management page at setup; copy it from there. Add Claude's callback (`https://claude.ai/api/mcp/auth_callback`, per Anthropic's connector docs as read by our research agent) if Claude.ai connectors should work too. Loopback redirects are needed only if Claude Code or Codex users switch from bearer to OAuth. Allow both `http://localhost:<any port>/callback` and `http://127.0.0.1:<any port>/callback`, plus the same with a `/<callback_id>` path suffix, (Claude Code uses `localhost` by default per https://code.claude.com/docs/en/mcp; Codex uses `http://127.0.0.1/callback`, with a callback id path suffix when issuer identification is not advertised, per https://developers.openai.com/codex/mcp).
 
 ### R6. Where Cloudflare Access sits
 
@@ -85,6 +85,8 @@ Claude Code and Codex work with the per-client service tokens L2 already has. Ke
 - (b) serve the static-bearer path on a separate hostname or route that stays behind Access with a Service Auth policy.
 
 Option (b) keeps the public OAuth surface free of long-lived secrets and is L5's preference. Either way, never accept the static token as an OAuth token or the reverse.
+
+Independent of OAuth, fix this now: on `/mcp`, do not accept an Access JWT that came from an Access service token (it has `common_name` and no `email`) as a `human` principal. Either require the bearer service token on `/mcp`, or map Access service tokens to a named harness the same way `MCP_SERVICE_TOKENS` does. Today a Service Auth rule on `/mcp` lets the Access service token alone write as `human`, which contradicts the README's "those routes still require a bearer token".
 
 ### R8. Tool annotations
 
