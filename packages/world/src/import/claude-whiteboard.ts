@@ -393,7 +393,13 @@ export function importClaudeWhiteboard(input: unknown, options: ImportOptions = 
       updatedAt: at,
       version: 1,
       meta: {
-        import: { source: 'claude-whiteboard', elementIds: spec.elementIds },
+        // When one element expands into several nodes (a "God × Godbeast" line,
+        // a house list, a bullet list), `part` says which piece this node is.
+        import: {
+          source: 'claude-whiteboard',
+          elementIds: spec.elementIds,
+          ...(spec.key.includes('#') ? { part: spec.key.slice(spec.key.indexOf('#') + 1) } : {}),
+        },
         ...(spec.extraMeta ?? {}),
       },
     };
