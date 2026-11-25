@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { WorldNode } from '@starlight-agent-canvas/world';
 import { CanonGuardError } from './errors.js';
 import { openCanonPr } from './github.js';
-import { assertProposalPathAllowed, createCanonWriteGuard, PROPOSAL_PATH_PATTERN, type CanonFetchInit } from './guard.js';
+import { assertProposalPathAllowed, CANON_WRITE_BODY_KEYS, createCanonWriteGuard, PROPOSAL_PATH_PATTERN, type CanonFetchInit } from './guard.js';
 import { buildCanonProposal, type CanonProposalFile } from './proposal.js';
 
 const API = 'https://api.github.com';
@@ -209,6 +209,13 @@ describe('layer 2: createCanonWriteGuard', () => {
     ['duplicate keys hiding a main branch', 'PUT', contentsUrl, '{"message":"m","content":"eA==","branch":"main","branch":"canon/x"}'],
     ['duplicate keys hiding a main ref', 'POST', `${REPO}/git/refs`, `{"ref":"refs/heads/main","ref":"refs/heads/canon/x","sha":"${SHA}"}`],
     ['non-canonical JSON formatting', 'POST', `${REPO}/git/refs`, JSON.stringify({ ref: 'refs/heads/canon/x', sha: SHA }, null, 2)],
+    ['a ref creation with force', 'POST', `${REPO}/git/refs`, json({ ref: 'refs/heads/canon/x', sha: SHA, force: true })],
+    ['a ref creation with an extra key', 'POST', `${REPO}/git/refs`, json({ ref: 'refs/heads/canon/x', sha: SHA, issue: 1 })],
+    ['a contents write with a committer', 'PUT', contentsUrl, json({ ...putBody, committer: { name: 'Frank', email: 'f@example.com' } })],
+    ['a contents write with an author', 'PUT', contentsUrl, json({ ...putBody, author: { name: 'Frank', email: 'f@example.com' } })],
+    ['a PR converted from an issue', 'POST', `${REPO}/pulls`, json({ head: 'canon/x', base: 'main', draft: true, issue: 1 })],
+    ['a PR with maintainer_can_modify', 'POST', `${REPO}/pulls`, json({ title: 't', head: 'canon/x', base: 'main', body: 'b', draft: true, maintainer_can_modify: true })],
+    ['a PR with head_repo', 'POST', `${REPO}/pulls`, json({ title: 't', head: 'canon/x', base: 'main', draft: true, head_repo: 'evil/fork' })],
     ['a write with a query string', 'POST', `${REPO}/git/refs?force=true`, json({ ref: 'refs/heads/canon/x', sha: SHA })],
     ['a write outside /repos', 'POST', `${API}/gists`, json({ files: {} })],
     ['a read outside /repos', 'GET', `${API}/user`, undefined],
@@ -273,5 +280,28 @@ describe('malicious titles and slugs', () => {
     expect(written).toMatch(PROPOSAL_PATH_PATTERN);
     expect(puts[0]!.body).not.toHaveProperty('sha');
     expect(writes.map((c) => new URL(c.url).pathname)).toEqual(['/repos/o/r/git/refs', `/repos/o/r/contents/${proposal.path}`, '/repos/o/r/pulls']);
+  });
+});
+
+describe('layer 2: body key allowlist', () => {
+  it('names the refused keys', async () => {
+    const inner = async () => new Response('{}');
+    const guard = createCanonWriteGuard(inner, { owner: 'Arcanea-Labs', repo: 'arcanea-ai-app' });
+    await expect(guard(`${REPO}/pulls`, {
+      method: 'POST',
+      headers: {},
+      body: JSON.stringify({ title: 't', head: 'canon/x', base: 'main', draft: true, maintainer_can_modify: true }),
+    })).rejects.toMatchObject({ name: 'CanonGuardError', reason: expect.stringContaining('"maintainer_can_modify"') });
+  });
+
+  it('the executor sends only allowlisted keys on every write', async () => {
+    const gh = github();
+    await openCanonPr(build({}), { owner: 'Arcanea-Labs', repo: 'arcanea-ai-app', getToken: () => 'tok', fetch: gh.fetch });
+    const writes = gh.calls.filter((c) => c.method !== 'GET');
+    expect(writes.map((c) => [c.method, Object.keys(c.body!).sort()])).toEqual([
+      ['POST', [...CANON_WRITE_BODY_KEYS.createRef].sort()],
+      ['PUT', [...CANON_WRITE_BODY_KEYS.putContents].sort()],
+      ['POST', [...CANON_WRITE_BODY_KEYS.createPull].sort()],
+    ]);
   });
 });

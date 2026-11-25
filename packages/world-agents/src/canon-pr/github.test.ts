@@ -319,6 +319,51 @@ describe('openCanonPr', () => {
     expect(gh.calls).toHaveLength(0);
   });
 
+  it.each([[2_147_483_648], [3e9], [1e12]])('refuses timeoutMs %s above the timer limit', async (timeoutMs) => {
+    const gh = github();
+    const tokens = tokenSource();
+    expect(await caught(openCanonPr(proposal, { ...target, getToken: tokens.getToken, fetch: gh.fetch, timeoutMs })))
+      .toMatchObject({ code: 'INVALID_OPTIONS' });
+    expect(gh.calls).toHaveLength(0);
+    expect(tokens.count).toBe(0);
+  });
+
+  it('accepts timeoutMs 2_147_483_647', async () => {
+    const gh = github();
+    await expect(openCanonPr(proposal, { ...target, getToken: () => TOKEN, fetch: gh.fetch, timeoutMs: 2_147_483_647 })).resolves.toMatchObject({ prNumber: 42 });
+  });
+
+  it('reports the branch as possibly created when create-branch has a network error', async () => {
+    const drop = async (): Promise<ResponseLike> => {
+      throw new Error('connection reset');
+    };
+    const gh = github({ 'create-branch': drop });
+    const error = await caught(openCanonPr(proposal, { ...target, getToken: () => TOKEN, fetch: gh.fetch }));
+    expect(error).toMatchObject({ code: 'NETWORK_ERROR', step: 'create-branch', branch: 'canon/the-glass-orchard', path: proposal.path });
+    expect(error.calls!.map((c) => c.step)).toEqual(['get-repo', 'get-base-ref']);
+    expect(error.message).toContain('Branch canon/the-glass-orchard may have been created anyway');
+    expect(error.message).toContain('retry with a different slug');
+    expect(gh.calls.map((c) => c.step)).toEqual(['get-repo', 'get-base-ref', 'create-branch']);
+  });
+
+  it('reports the branch as possibly created when create-branch times out', async () => {
+    const hang = (init: CanonFetchInit) => new Promise<ResponseLike>((_resolve, reject) => {
+      init.signal!.addEventListener('abort', () => reject(init.signal!.reason));
+    });
+    const gh = github({ 'create-branch': hang });
+    const error = await caught(openCanonPr(proposal, { ...target, base: 'main', getToken: () => TOKEN, fetch: gh.fetch, timeoutMs: 20 }));
+    expect(error).toMatchObject({ code: 'TIMEOUT', step: 'create-branch', branch: 'canon/the-glass-orchard', path: proposal.path });
+    expect(error.calls!.map((c) => c.step)).toEqual(['get-base-ref']);
+    expect(error.message).toContain('may have been created anyway');
+  });
+
+  it('does not report a branch for an HTTP refusal of create-branch', async () => {
+    const gh = github({ 'create-branch': { status: 403, json: { message: 'Forbidden' } } });
+    const error = await caught(openCanonPr(proposal, { ...target, getToken: () => TOKEN, fetch: gh.fetch }));
+    expect(error).toMatchObject({ code: 'HTTP_ERROR', step: 'create-branch' });
+    expect(error.branch).toBeUndefined();
+  });
+
   it.each([
     ['check-file', { status: 200, json: { sha: 'b'.repeat(40) } }, 'FILE_EXISTS', ['get-repo', 'get-base-ref', 'create-branch', 'check-file']],
     ['put-file', { status: 409, json: { message: 'Conflict' } }, 'HTTP_ERROR', ['get-repo', 'get-base-ref', 'create-branch', 'check-file', 'put-file']],

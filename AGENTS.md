@@ -34,9 +34,9 @@ This repo is an OSS-first, local-first, MCP-native research/workflow canvas.
 
 ## World Canvas Agents
 
-A World Canvas world (for example Arcanea) is one graph of typed nodes and edges that Claude, Codex and ChatGPT edit through one remote MCP server. This is the issue #63 extension and is the one place this repo has a remote, authenticated server; its only external write is a draft PR that adds one proposal file and that a human must review and merge. Before operating a world, read `.claude/skills/world-canvas/SKILL.md`. Contract: `docs/world-canvas/spec.md` and `packages/world`. Client setup: `docs/world-canvas/connect-agents.md`.
+A World Canvas world (for example Arcanea) is one graph of typed nodes and edges that Claude, Codex and ChatGPT edit through one remote MCP server. This is the issue #63 extension and is the one place this repo has a remote, authenticated server; its external writes are a draft canon PR (a new `canon/<slug>` branch plus one proposal file) and, for `import_whiteboard`, a new world or a draft branch, all for human review and merge. Before operating a world, read `.claude/skills/world-canvas/SKILL.md`. Contract: `docs/world-canvas/spec.md` and `packages/world`. Client setup: `docs/world-canvas/connect-agents.md`.
 
-- Tools (every call takes `worldId`): `get_world`, `get_region`, `search`, `add_node`, `update_node`, `link`, `move`, `propose_canon`, `layout_region`, `import_whiteboard`. There is no delete tool.
+- Tools (every call takes `worldId`, optional only for `import_whiteboard`): `get_world`, `get_region`, `search`, `add_node`, `update_node`, `link`, `move`, `propose_canon`, `layout_region`, `import_whiteboard`. There is no delete tool.
 - Op versions: writes to an existing node or edge carry `baseVersion`. On `STALE_VERSION`, re-read, merge and retry once; never overwrite blindly. The format is `starlight.worldGraph.v1`; unknown keys are rejected.
 - Canon gate: agents create `draft` or `proposed` only and can never set `canon`. Use `propose_canon`, which opens a draft PR adding one file under `.arcanea/lore/proposals/` in arcanea-ai-app. Never edit `CANON_LOCKED.md` or existing lore files; only the Creator approves canon.
 - Regions: read by region or bounds with `get_region` and a zoom `level`, never the whole world. Place nodes inside their region's bounds.

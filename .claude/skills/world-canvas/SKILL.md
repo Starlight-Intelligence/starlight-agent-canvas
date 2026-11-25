@@ -11,7 +11,7 @@ Contract: `docs/world-canvas/spec.md` and the zod schemas in `packages/world/src
 
 ## Before you write
 
-1. Every tool call takes `worldId` (for Arcanea, `arcanea`; ask the user if you do not know it). Call `get_world` once. Note `world.version`, the regions, and the counts by kind.
+1. Every tool call takes `worldId` (optional only for `import_whiteboard`, where omitting it creates a new world; for Arcanea, `arcanea`; ask the user if you do not know it). Call `get_world` once. Note `world.version`, the regions, and the counts by kind.
 2. Find what already exists with `search` (by title or text, filter by `kinds`). Do not create a node that duplicates an existing title in the same region; update or link the existing one.
 3. For anything about Arcanea lore, read `.arcanea/lore/CANON_LOCKED.md` in the arcanea-ai-app repo first. Never contradict a LOCKED truth in a node you write.
 

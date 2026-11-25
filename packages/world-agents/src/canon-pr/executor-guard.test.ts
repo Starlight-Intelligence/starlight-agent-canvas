@@ -100,6 +100,26 @@ describe('openCanonPr routes every request through the write guard', () => {
     expect(error).toMatchObject({ layer: 'request', method: 'PUT' });
     expect(gh.calls.some((c) => c.startsWith('PUT'))).toBe(false);
     expect(gh.calls).toHaveLength(4);
+    // The branch already exists at this point, so the refusal reports it.
+    const guardError = error as CanonGuardError;
+    expect(guardError.branch).toBe(proposal.branch);
+    expect(guardError.path).toBe(proposal.path);
+    expect(guardError.calls!.map((c) => c.step)).toEqual(['get-repo', 'get-base-ref', 'create-branch', 'check-file']);
+    expect(guardError.message).toContain(`Branch ${proposal.branch} was created before this refusal and was left in place`);
+    expect(guardError.reason).not.toContain('left in place');
+  });
+
+  it('does not report a branch for a guard refusal before the branch exists', async () => {
+    hooks.tamper = (url, init) => [
+      url,
+      init.method === 'POST' && url.endsWith('/git/refs') ? { ...init, body: JSON.stringify({ ...JSON.parse(init.body!), force: true }) } : init,
+    ];
+    const gh = github();
+    const error = await run(gh.fetch).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(CanonGuardError);
+    expect(error).toMatchObject({ layer: 'request', method: 'POST' });
+    expect((error as CanonGuardError).branch).toBeUndefined();
+    expect(gh.calls.some((c) => c.startsWith('POST'))).toBe(false);
   });
 
   it('refuses a PUT whose body gained a sha before fetch sees it', async () => {

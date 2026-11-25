@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   createWorldClient,
   HttpMcpTransport,
+  MAX_TIMEOUT_MS,
   MCP_PROTOCOL_VERSION,
   WorldAuthError,
   WorldClientConfigError,
@@ -611,5 +612,76 @@ describe('HttpMcpTransport review fixes', () => {
     } finally {
       globalThis.process = saved;
     }
+  });
+});
+
+describe('HttpMcpTransport second review', () => {
+  it('redacts before truncating, so a secret straddling the cut leaks no prefix', async () => {
+    // 480 + token: the 500 character cut falls inside each secret.
+    const scenarios: Array<[string, (sent: Sent) => Response]> = [];
+    for (const secret of SECRETS) {
+      const text = `${'x'.repeat(480)}${secret}${'y'.repeat(40)}`;
+      scenarios.push(
+        [`HTTP 500 with ${secret}`, () => new Response(text, { status: 500 })],
+        [`isError text with ${secret}`, (s) => toolResult(s.body.id!, { isError: true, content: [{ type: 'text', text }] })],
+        [`coded isError text with ${secret}`, (s) => toolResult(s.body.id!, { isError: true, content: [{ type: 'text', text: `STALE_VERSION: ${text}` }] })],
+        [`op error with ${secret}`, (s) => toolResult(s.body.id!, { isError: true, structuredContent: { code: 'INVALID_OP', message: text, id: text } })],
+        [`JSON-RPC error with ${secret}`, (s) => json({ jsonrpc: '2.0', id: s.body.id, error: { code: -32000, message: text } })],
+      );
+    }
+    for (const [name, reply] of scenarios) {
+      const server = fakeServer(reply);
+      const error = await transport(server.fetch).callTool('get_world', {}).catch((e: unknown) => e);
+      expect(error, name).toBeInstanceOf(Error);
+      const text = [(error as Error).message, JSON.stringify(error)].join('\n');
+      for (const secret of SECRETS) expect(text, name).not.toContain(secret.slice(0, 6));
+    }
+    const network = await transport(vi.fn(async () => {
+      throw new TypeError(`${'x'.repeat(480)}${TOKEN}`);
+    })).callTool('get_world', {}).catch((e: unknown) => e);
+    expect((network as Error).message).not.toContain(TOKEN.slice(0, 6));
+  });
+
+  it('rejects timeoutMs above 2_147_483_647', () => {
+    expect(MAX_TIMEOUT_MS).toBe(2_147_483_647);
+    for (const timeoutMs of [2_147_483_648, 3e9, 1e12]) {
+      expect(() => transport(vi.fn(), { timeoutMs })).toThrow(WorldClientConfigError);
+    }
+    expect(() => transport(vi.fn(), { timeoutMs: 2_147_483_647 })).not.toThrow();
+  });
+
+  it('does not wait for a body cancel that never settles (SSE and notifications/initialized)', async () => {
+    const stuckBody = (chunks: string[]) => {
+      const encoder = new TextEncoder();
+      let i = 0;
+      return new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (i < chunks.length) controller.enqueue(encoder.encode(chunks[i++]!));
+        },
+        cancel: () => new Promise<void>(() => undefined),
+      });
+    };
+    const fetch = vi.fn(async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body)) as Sent['body'];
+      if (body.method === 'initialize') return initResult(body.id!);
+      if (body.method === 'notifications/initialized') return new Response(stuckBody(['ok']), { status: 202 });
+      return new Response(stuckBody([`data: {"jsonrpc":"2.0","id":${body.id},"result":{"structuredContent":{"done":true}}}\n\n`]), {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' },
+      });
+    });
+    const outcome = await Promise.race([
+      transport(fetch, { timeoutMs: 5_000 }).callTool('get_world', {}),
+      new Promise((resolve) => setTimeout(() => resolve('hung'), 500)),
+    ]);
+    expect(outcome).toEqual({ done: true });
+  });
+
+  it('says in the timeout error that the call may have completed', async () => {
+    const fetch = vi.fn(() => new Promise<Response>(() => undefined));
+    const error = await transport(fetch, { timeoutMs: 10 }).callTool('get_world', {}).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(WorldTransportError);
+    expect((error as Error).message).toContain('timed out after 10 ms');
+    expect((error as Error).message).toContain('may still have completed on the server (a write may have been applied); re-read before retrying');
   });
 });

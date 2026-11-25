@@ -28,6 +28,8 @@ const RESERVED_HEADERS = new Set(['authorization', 'content-type', 'accept', 'mc
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 const MESSAGE_MAX = 500;
 export const DEFAULT_TIMEOUT_MS = 30_000;
+/** Largest delay timers accept (2^31 - 1 ms); larger values overflow and fire at once. */
+export const MAX_TIMEOUT_MS = 2_147_483_647;
 
 /**
  * Codes recognised at the start of a plain-text tool error ("STALE_VERSION: ...").
@@ -84,7 +86,7 @@ interface JsonRpcResponse {
 
 interface RpcReply {
   message: JsonRpcResponse;
-  redact: (text: string) => string;
+  sanitize: (text: string) => string;
 }
 
 interface RequestSecrets {
@@ -140,8 +142,8 @@ export class HttpMcpTransport implements WorldTransport {
     this.#fetch = options.fetch;
     this.clientInfo = options.clientInfo ?? { name: '@starlight-agent-canvas/world-agents', version: '0.1.0' };
     const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-    if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
-      throw new WorldClientConfigError('HttpMcpTransport timeoutMs must be a positive integer number of milliseconds.');
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > MAX_TIMEOUT_MS) {
+      throw new WorldClientConfigError(`HttpMcpTransport timeoutMs must be a positive integer number of milliseconds, at most ${MAX_TIMEOUT_MS}.`);
     }
     this.timeoutMs = timeoutMs;
   }
@@ -173,7 +175,7 @@ export class HttpMcpTransport implements WorldTransport {
         throw retryError;
       }
     }
-    return readToolResult(name, reply.message, reply.redact);
+    return readToolResult(name, reply.message, reply.sanitize);
   }
 
   private ensureInitialized(): Promise<void> {
@@ -188,13 +190,13 @@ export class HttpMcpTransport implements WorldTransport {
     this.ready = false;
     this.#sessionId = undefined;
     this.protocolVersion = undefined;
-    const { message, redact } = await this.request('initialize', {
+    const { message, sanitize } = await this.request('initialize', {
       protocolVersion: MCP_PROTOCOL_VERSION,
       capabilities: {},
       clientInfo: this.clientInfo,
     });
     if (message.error) {
-      throw new WorldTransportError(`MCP initialize failed: ${redact(truncate(String(message.error.message)))}`);
+      throw new WorldTransportError(`MCP initialize failed: ${sanitize(String(message.error.message))}`);
     }
     const result = message.result as { protocolVersion?: unknown } | undefined;
     if (!result || typeof result.protocolVersion !== 'string') {
@@ -211,7 +213,7 @@ export class HttpMcpTransport implements WorldTransport {
     if (!response.ok) {
       throw new WorldTransportError(`MCP ${method} was rejected with HTTP ${response.status}.`, response.status);
     }
-    await response.body?.cancel();
+    void response.body?.cancel().catch(() => undefined);
   }
 
   private async request(method: string, params: unknown): Promise<RpcReply> {
@@ -219,10 +221,10 @@ export class HttpMcpTransport implements WorldTransport {
     const sentSession = this.#sessionId;
     const signal = AbortSignal.timeout(this.timeoutMs);
     const { response, secrets } = await this.post({ jsonrpc: '2.0', id, method, params }, signal);
-    const redact = makeRedactor(secrets.values);
+    const sanitize = makeSanitizer(secrets.values);
 
     if (response.status === 404 && sentSession !== undefined) {
-      await response.body?.cancel().catch(() => undefined);
+      void response.body?.cancel().catch(() => undefined);
       if (this.#sessionId === sentSession) {
         this.ready = false;
         this.#sessionId = undefined;
@@ -232,23 +234,25 @@ export class HttpMcpTransport implements WorldTransport {
     }
     try {
       if (!response.ok) {
-        const detail = redact(truncate(await untilAborted(response.text(), signal)));
+        const detail = sanitize(await untilAborted(response.text(), signal));
         throw new WorldTransportError(`MCP ${method} failed with HTTP ${response.status}${detail ? `: ${detail}` : '.'}`, response.status);
       }
       if (method === 'initialize') {
         const session = response.headers.get('mcp-session-id');
         if (session) this.#sessionId = session;
       }
-      return { message: await readJsonRpcResponse(response, id, method, redact, signal), redact };
+      return { message: await readJsonRpcResponse(response, id, method, sanitize, signal), sanitize };
     } catch (error) {
       if (error instanceof WorldClientError) throw error;
       if (signal.aborted) throw this.timeoutError(method);
-      throw new WorldTransportError(`Reading the MCP ${method} response failed (${redact(truncate(describe(error)))}).`, response.status);
+      throw new WorldTransportError(`Reading the MCP ${method} response failed (${sanitize(describe(error))}).`, response.status);
     }
   }
 
   private timeoutError(method: string): WorldTransportError {
-    return new WorldTransportError(`MCP ${method} timed out after ${this.timeoutMs} ms.`);
+    return new WorldTransportError(
+      `MCP ${method} timed out after ${this.timeoutMs} ms. The call may still have completed on the server (a write may have been applied); re-read before retrying.`,
+    );
   }
 
   private async post(message: Record<string, unknown>, signal: AbortSignal): Promise<{ response: Response; secrets: RequestSecrets }> {
@@ -270,10 +274,10 @@ export class HttpMcpTransport implements WorldTransport {
     } catch (error) {
       if (signal.aborted) throw this.timeoutError(String(message.method));
       // Do not keep the original error as a cause: it is not ours to vouch for.
-      throw new WorldTransportError(`Request to the MCP server failed (${makeRedactor(secrets.values)(truncate(describe(error)))}).`);
+      throw new WorldTransportError(`Request to the MCP server failed (${makeSanitizer(secrets.values)(describe(error))}).`);
     }
     if (response.type === 'opaqueredirect' || response.status === 0 || (response.status >= 300 && response.status < 400)) {
-      await response.body?.cancel().catch(() => undefined);
+      void response.body?.cancel().catch(() => undefined);
       // The Location value is not shown: it may carry anything.
       throw new WorldTransportError(
         `The MCP server answered with a redirect or an opaque response (HTTP ${response.status}). Redirects are not followed; configure the final URL.`,
@@ -281,7 +285,7 @@ export class HttpMcpTransport implements WorldTransport {
       );
     }
     if (response.status === 401 || response.status === 403) {
-      await response.body?.cancel().catch(() => undefined);
+      void response.body?.cancel().catch(() => undefined);
       throw new WorldAuthError(
         `The MCP server rejected the credentials (HTTP ${response.status}). Check the token in ${this.tokenEnvVar}`
           + `${this.headerEnvVars.length ? ` and the values of ${this.headerEnvVars.map(([, envVar]) => envVar).join(', ')}` : ''}.`,
@@ -379,9 +383,14 @@ function safeKey(key: string): string {
   return /^[A-Za-z][A-Za-z0-9_]{0,40}$/.test(key) ? key : '(not shown)';
 }
 
-function makeRedactor(secrets: readonly string[]): (text: string) => string {
+/**
+ * Every server- or network-supplied text goes through this before it reaches a
+ * message: redact first, then truncate. Truncating first could cut a secret so
+ * that redaction no longer matches and its prefix leaks.
+ */
+function makeSanitizer(secrets: readonly string[]): (text: string) => string {
   const values = secrets.filter((value) => value.length > 0).sort((a, b) => b.length - a.length);
-  return (text) => values.reduce((acc, value) => acc.split(value).join('[redacted]'), text);
+  return (text) => truncate(values.reduce((acc, value) => acc.split(value).join('[redacted]'), text));
 }
 
 function truncate(text: string): string {
@@ -392,7 +401,7 @@ async function readJsonRpcResponse(
   response: Response,
   id: number,
   method: string,
-  redact: (text: string) => string,
+  sanitize: (text: string) => string,
   signal: AbortSignal,
 ): Promise<JsonRpcResponse> {
   const contentType = (response.headers.get('content-type') ?? '').toLowerCase();
@@ -409,8 +418,8 @@ async function readJsonRpcResponse(
     }
     found = (Array.isArray(body) ? body : [body]).find((message) => isResponseFor(message, id));
   } else {
-    await response.body?.cancel().catch(() => undefined);
-    throw new WorldTransportError(`MCP ${method} returned unsupported content type "${redact(truncate(contentType))}".`, response.status);
+    void response.body?.cancel().catch(() => undefined);
+    throw new WorldTransportError(`MCP ${method} returned unsupported content type "${sanitize(contentType)}".`, response.status);
   }
   if (!found) throw new WorldTransportError(`MCP ${method} returned no JSON-RPC response for request ${id}.`, response.status);
   return found;
@@ -435,7 +444,8 @@ async function readSseResponse(response: Response, id: number, signal: AbortSign
       if (found || done) return found;
     }
   } finally {
-    await reader.cancel().catch(() => undefined);
+    // Not awaited: a source whose cancel never settles must not hang the call.
+    void reader.cancel().catch(() => undefined);
   }
 }
 
@@ -486,13 +496,13 @@ class SseResponseFinder {
   }
 }
 
-function readToolResult(tool: string, response: JsonRpcResponse, redact: (text: string) => string): unknown {
+function readToolResult(tool: string, response: JsonRpcResponse, sanitize: (text: string) => string): unknown {
   if (response.error) {
     const data = response.error.data;
-    const fromData = data && typeof data === 'object' ? toolErrorDetail(data as Record<string, unknown>, redact) : undefined;
+    const fromData = data && typeof data === 'object' ? toolErrorDetail(data as Record<string, unknown>, sanitize) : undefined;
     throw new WorldToolError(tool, fromData ?? {
       code: 'RPC_ERROR',
-      message: redact(truncate(String(response.error.message ?? 'unknown error'))),
+      message: sanitize(String(response.error.message ?? 'unknown error')),
       rpcCode: typeof response.error.code === 'number' ? response.error.code : undefined,
     });
   }
@@ -520,31 +530,31 @@ function readToolResult(tool: string, response: JsonRpcResponse, redact: (text: 
   if (result.isError === true) {
     const record = parsed && payload && typeof payload === 'object' ? payload as Record<string, unknown> : undefined;
     const nested = record?.error && typeof record.error === 'object' ? record.error as Record<string, unknown> : record;
-    const detail = nested ? toolErrorDetail(nested, redact) : undefined;
-    throw new WorldToolError(tool, detail ?? textErrorDetail(firstText?.text, redact));
+    const detail = nested ? toolErrorDetail(nested, sanitize) : undefined;
+    throw new WorldToolError(tool, detail ?? textErrorDetail(firstText?.text, sanitize));
   }
   if (!parsed) throw new WorldTransportError(`${tool} returned neither structuredContent nor JSON text content.`);
   return payload;
 }
 
 /** Plain-text tool error. "STALE_VERSION: node n_x is at 4" keeps its code when it is a known one. */
-function textErrorDetail(text: string | undefined, redact: (text: string) => string): WorldToolErrorDetail {
+function textErrorDetail(text: string | undefined, sanitize: (text: string) => string): WorldToolErrorDetail {
   if (text === undefined) return { code: 'TOOL_ERROR', message: 'tool reported an error without details' };
   const match = /^([A-Z_]+):\s*([\s\S]*)$/.exec(text);
   if (match && TEXT_ERROR_CODE_SET.has(match[1]!)) {
-    return { code: match[1]!, message: redact(truncate(match[2]!.trim() || match[1]!)) };
+    return { code: match[1]!, message: sanitize(match[2]!.trim() || match[1]!) };
   }
-  return { code: 'TOOL_ERROR', message: redact(truncate(text)) };
+  return { code: 'TOOL_ERROR', message: sanitize(text) };
 }
 
-function toolErrorDetail(source: Record<string, unknown>, redact: (text: string) => string): WorldToolErrorDetail | undefined {
+function toolErrorDetail(source: Record<string, unknown>, sanitize: (text: string) => string): WorldToolErrorDetail | undefined {
   if (typeof source.code !== 'string' || source.code === '') return undefined;
   const detail: WorldToolErrorDetail = {
-    code: redact(truncate(source.code)),
-    message: redact(truncate(typeof source.message === 'string' ? source.message : 'no message')),
+    code: sanitize(source.code),
+    message: sanitize(typeof source.message === 'string' ? source.message : 'no message'),
   };
   if (Number.isInteger(source.opIndex)) detail.opIndex = source.opIndex as number;
-  if (typeof source.id === 'string') detail.id = redact(truncate(source.id));
+  if (typeof source.id === 'string') detail.id = sanitize(source.id);
   if (Number.isInteger(source.expectedVersion)) detail.expectedVersion = source.expectedVersion as number;
   if (Number.isInteger(source.actualVersion)) detail.actualVersion = source.actualVersion as number;
   return detail;

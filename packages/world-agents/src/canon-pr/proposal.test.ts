@@ -279,6 +279,27 @@ describe('inline Markdown spoofing', () => {
     expect(live(out)).not.toMatch(/[[\]()!*_<>&~$`@#|\\]|https?:|www\./);
   });
 
+  it.each([
+    ['ftp://e.x\\*\\*\\#\\#'],
+    ['FTP://e.x'],
+    ['see gopher://e.x and ssh://host/x and file:///etc/passwd'],
+    ['irc://chat.example/room, git+ssh://h/r'],
+    ['mail frank@example.com now'],
+    ['first.last+tag@sub.example.co.uk'],
+    ['mailto:frank@example.com'],
+    ['xmpp:frank@example.com'],
+  ])('puts any scheme://, www. or email-like autolink in a code span: %j', (text) => {
+    const out = inlineMarkdown(text);
+    expect(out).not.toMatch(/\n/);
+    const rest = live(out);
+    expect(rest).not.toMatch(/[a-z][a-z0-9+.-]*:\/\/|www\.|mailto:|xmpp:|@/i);
+  });
+
+  it('renders the ftp example as one literal code span', () => {
+    expect(inlineMarkdown('ftp://e.x\\*\\*\\#\\#')).toBe('`ftp://e.x\\*\\*\\#\\#`');
+    expect(inlineMarkdown('mail frank@example.com')).toBe('mail `frank@example.com`');
+  });
+
   it('keeps mentions and references out of the file and the PR body', () => {
     const spoofed = [
       node('n_orchard', { title: spoof, summary: spoof, tags: [spoof] }),

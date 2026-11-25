@@ -123,7 +123,7 @@ codex mcp add world-canvas --url https://world.example.workers.dev/mcp --bearer-
 codex mcp list
 ```
 
-Our reviewer confirmed the `--url` and `--bearer-token-env-var` flags in the Codex source (`codex-rs/cli/src/mcp_cmd.rs`) and https://developers.openai.com/codex/cli/reference on 2026-11-25. Run `codex mcp add --help` on your build if it is older. The `env_http_headers` line still has to be added by hand.
+The `--url` and `--bearer-token-env-var` flags are defined in the Codex source (`codex-rs/cli/src/mcp_cmd.rs`) and listed in https://developers.openai.com/codex/cli/reference (checked 2026-11-25). Run `codex mcp add --help` on your build if it is older. The `env_http_headers` line still has to be added by hand.
 
 In the desktop app: Settings, MCP servers, Add server, choose Streamable HTTP, enter the URL, save, then Restart (same OpenAI page). Type `/mcp` in the composer to see connected servers.
 

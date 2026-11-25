@@ -29,14 +29,28 @@ export type CanonGuardLayer = 'path' | 'request';
  */
 export class CanonGuardError extends Error {
   override readonly name = 'CanonGuardError';
+  /** Set when the refusal came after the canon branch was created; the branch was left in place. */
+  readonly branch?: string;
+  readonly path?: string;
+  /** Requests made before the refusal, set together with `branch`. */
+  readonly calls?: readonly ExecutedCall[];
 
   constructor(
     readonly layer: CanonGuardLayer,
     readonly reason: string,
     readonly method?: string,
     readonly target?: string,
+    leftover?: { branch: string; path: string; calls: readonly ExecutedCall[] },
   ) {
-    super(method && target ? `Refused ${method} ${target}: ${reason}` : `Refused: ${reason}`);
+    const refused = method && target ? `Refused ${method} ${target}: ${reason}` : `Refused: ${reason}`;
+    super(leftover
+      ? `${refused} Branch ${leftover.branch} was created before this refusal and was left in place; it is not reused.`
+      : refused);
+    if (leftover) {
+      this.branch = leftover.branch;
+      this.path = leftover.path;
+      this.calls = leftover.calls;
+    }
   }
 }
 

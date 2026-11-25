@@ -18,6 +18,8 @@ export const GITHUB_API_VERSION = '2022-11-28';
 export const DEFAULT_GITHUB_API_BASE_URL = GITHUB_API_ORIGIN;
 export const GITHUB_USER_AGENT = 'starlight-agent-canvas-world-agents';
 export const DEFAULT_CANON_PR_TIMEOUT_MS = 30_000;
+/** Largest delay timers accept (2^31 - 1 ms); larger values overflow and fire at once. */
+const MAX_CANON_PR_TIMEOUT_MS = 2_147_483_647;
 
 /** Shown in planned calls when the value is only known at run time. */
 export const DEFAULT_BRANCH_PLACEHOLDER = '{default_branch}';
@@ -204,7 +206,9 @@ export async function openCanonPr(proposal: CanonProposalFile, options: OpenCano
     invalid(`apiBaseUrl must be ${GITHUB_API_ORIGIN}; other hosts, ports, paths and credentials are refused.`);
   }
   const timeoutMs = options.timeoutMs ?? DEFAULT_CANON_PR_TIMEOUT_MS;
-  if (typeof timeoutMs !== 'number' || !Number.isFinite(timeoutMs) || timeoutMs <= 0) invalid('timeoutMs must be a positive number.');
+  if (typeof timeoutMs !== 'number' || !Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > MAX_CANON_PR_TIMEOUT_MS) {
+    invalid(`timeoutMs must be a positive number of milliseconds, at most ${MAX_CANON_PR_TIMEOUT_MS}.`);
+  }
 
   let token: string;
   try {
@@ -289,7 +293,21 @@ export async function openCanonPr(proposal: CanonProposalFile, options: OpenCano
     throw new CanonPrError('INVALID_RESPONSE', 'get-base-ref', `GitHub did not return a commit sha for ${base}.`);
   }
 
-  const created = await send(callFor('create-branch', fixed, target, base, sha));
+  let created: Awaited<ReturnType<typeof send>>;
+  try {
+    created = await send(callFor('create-branch', fixed, target, base, sha));
+  } catch (error) {
+    // No response does not mean no branch: GitHub may have created it before the connection dropped.
+    if (error instanceof CanonPrError && (error.code === 'NETWORK_ERROR' || error.code === 'TIMEOUT')) {
+      throw new CanonPrError(
+        error.code,
+        error.step,
+        `${error.message} Branch ${fixed.branch} may have been created anyway; it is never reused. Check for it and retry with a different slug.`,
+        { branch: fixed.branch, path: fixed.path, calls: [...calls] },
+      );
+    }
+    throw error;
+  }
   if (created.status === 422) {
     httpError('create-branch', 422, created.data, 'BRANCH_EXISTS', `. Branch ${fixed.branch} already exists; it is never reused. Pick another slug.`);
   }
@@ -319,6 +337,14 @@ export async function openCanonPr(proposal: CanonProposalFile, options: OpenCano
     }
     return { prUrl, prNumber, branch: fixed.branch, path: fixed.path, calls };
   } catch (error) {
+    if (error instanceof CanonGuardError) {
+      // Still a guard refusal; it only gains the leftover branch.
+      throw new CanonGuardError(error.layer, error.reason, error.method, error.target, {
+        branch: fixed.branch,
+        path: fixed.path,
+        calls: [...calls],
+      });
+    }
     if (!(error instanceof CanonPrError)) throw error;
     throw new CanonPrError(
       error.code,

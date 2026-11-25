@@ -43,11 +43,20 @@ function oneLine(text: string): string {
 
 /**
  * Things GitHub turns live even after backslash escaping, because it links
- * them in the rendered text: URLs, @mentions, #123 and owner/repo#123
- * references, GH-123. These go into code spans, where GitHub links nothing.
- * None of the patterns can contain a backtick or a pipe.
+ * them in the rendered text: anything shaped like `scheme://...` (http, https,
+ * ftp and others), `www.` hosts, email addresses and `mailto:`/`xmpp:` links,
+ * @mentions, #123 and owner/repo#123 references, GH-123. These go into code
+ * spans, where GitHub links nothing. None of the patterns can contain a
+ * backtick or a pipe.
  */
-const LIVE_TOKEN = /https?:\/\/[^\s`|()<>[\]"']+|www\.[^\s`|()<>[\]"']+|[@#][A-Za-z0-9][\w./-]*|\bGH-\d+\b/gi;
+const LIVE_TOKEN = new RegExp([
+  /[a-z][a-z0-9+.-]*:\/\/[^\s`|()<>[\]"']+/.source,
+  /www\.[^\s`|()<>[\]"']+/.source,
+  /(?:mailto|xmpp):[^\s`|()<>[\]"']+/.source,
+  /[\w.+-]+@[\w-]+(?:\.[\w-]+)+/.source,
+  /[@#][A-Za-z0-9][\w./-]*/.source,
+  /\bGH-\d+\b/.source,
+].join('|'), 'gi');
 /** Markdown punctuation that can start links, images, emphasis, HTML, entities, math or table cells. */
 const MARKDOWN_PUNCTUATION = /[\\`*_[\]()!#@&~<>|$]/g;
 

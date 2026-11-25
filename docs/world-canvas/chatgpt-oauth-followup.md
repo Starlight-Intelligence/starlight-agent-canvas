@@ -18,9 +18,9 @@ All URLs below assume one stable public origin, written `https://<host>`. Use a 
 
 1. `POST /mcp` (Streamable HTTP) accepts a valid OAuth access token in `Authorization: Bearer`.
 2. With no token, or an invalid one, answer `401` with
-   `WWW-Authenticate: Bearer resource_metadata="https://<host>/.well-known/oauth-protected-resource", scope="world:read world:write"`.
+   `WWW-Authenticate: Bearer resource_metadata="https://<host>/.well-known/oauth-protected-resource/mcp", scope="world:read world:write"` (the path-specific metadata URL from R2).
 3. Validate on every request: signature or token lookup, `iss`, `aud` equal to the `resource` value in R2 exactly, `exp` and `nbf`, and scopes. Enforce scopes in the handler; Cloudflare's securing guide says advertised required scopes are not enforced for you (https://developers.cloudflare.com/agents/model-context-protocol/guides/securing-mcp-server/, read by our research agent 2026-11-25).
-4. Map the token to the `Actor` used by `applyOps` (spec 4): `actor` from the user's stable subject, `harness` from a client identity the client cannot fake. That means the CIMD `client_id` URL (`https://chatgpt.com/oauth/client.json` or `https://chatgpt.com/oauth/{callback_id}/client.json` gives `chatgpt`; `https://chatgpt.com/oauth/codex/...` gives `codex`) or the registered redirect URI (`https://chatgpt.com/connector...` gives `chatgpt`, `https://claude.ai/api/mcp/auth_callback` gives `claude`). Never use the self-asserted `client_name`, because any DCR client can claim any name. When no trusted mapping applies, use a neutral slug such as `mcp-client`. Never take harness or actor from tool arguments.
+4. Map the token to the `Actor` used by `applyOps` (spec 4): `actor` from the user's stable subject, `harness` from a client identity the client cannot fake. That means the CIMD `client_id` URL or a non-loopback registered redirect URI. Sourced mappings: `https://chatgpt.com/oauth/client.json` and `https://chatgpt.com/oauth/{callback_id}/client.json` give `chatgpt` (https://developers.openai.com/plugins/build/auth.md); `https://chatgpt.com/oauth/codex/client.json` and `https://chatgpt.com/oauth/codex/{callback_id}/client.json` give `codex` (Codex CLI's CIMD documents, https://developers.openai.com/codex/mcp, read 2026-11-25); a redirect URI under `https://chatgpt.com/connector` gives `chatgpt`; `https://claude.ai/api/mcp/auth_callback` gives `claude` (claude.ai connectors only). A loopback redirect (`localhost` or `127.0.0.1`) cannot tell Claude Code from Codex or any other local client, so on its own it maps to the neutral slug. Never use the self-asserted `client_name`, because any DCR client can claim any name. When no trusted mapping applies, use a neutral slug such as `mcp-client`. Never take harness or actor from tool arguments.
 
 ### R2. `GET /.well-known/oauth-protected-resource` (RFC 9728)
 
@@ -97,7 +97,7 @@ KV `OAUTH_KV`; secrets `ACCESS_CLIENT_ID`, `ACCESS_CLIENT_SECRET`, `ACCESS_TOKEN
 ## Acceptance tests for L2
 
 1. `curl -i https://<host>/mcp` with no token returns 401 and the `WWW-Authenticate` header from R1.2.
-2. `GET /.well-known/oauth-protected-resource` and `GET /.well-known/oauth-authorization-server` return the documents in R2 and R3, and `issuer` equals the `authorization_servers` entry.
+2. `GET /.well-known/oauth-protected-resource/mcp`, `GET /.well-known/oauth-protected-resource` and `GET /.well-known/oauth-authorization-server` return the documents in R2 and R3, and `issuer` equals the `authorization_servers` entry.
 3. MCP Inspector's auth walkthrough completes the code flow with PKCE and gets a token whose `aud` is `https://<host>/mcp`.
 4. A token minted for another resource is rejected with 401.
 5. ChatGPT: Plugins, Add custom MCP server, OAuth, sign in through Access, then `get_world` runs and `add_node` asks for confirmation and succeeds. The created node's `createdBy.harness` is `chatgpt`.

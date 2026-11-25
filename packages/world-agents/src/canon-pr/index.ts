@@ -26,6 +26,7 @@ export {
   assertProposalPathAllowed,
   createCanonWriteGuard,
   CANON_BRANCH_PATTERN,
+  CANON_WRITE_BODY_KEYS,
   GITHUB_API_ORIGIN,
   PROPOSAL_PATH_PATTERN,
   PROPOSALS_DIR,

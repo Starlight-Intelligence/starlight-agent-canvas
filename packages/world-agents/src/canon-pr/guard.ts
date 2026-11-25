@@ -68,6 +68,23 @@ export interface CanonWriteGuardOptions {
   repo: string;
 }
 
+/**
+ * The only body keys each allowed write may carry. Anything else (for example
+ * `sha`, `force`, `issue`, `committer`, `author`, `maintainer_can_modify`) is refused.
+ */
+export const CANON_WRITE_BODY_KEYS = Object.freeze({
+  createRef: Object.freeze(['ref', 'sha'] as const),
+  putContents: Object.freeze(['message', 'content', 'branch'] as const),
+  createPull: Object.freeze(['title', 'head', 'base', 'body', 'draft'] as const),
+});
+
+function refuseUnknownKeys(body: Record<string, unknown>, allowed: readonly string[], what: string, refuse: (reason: string) => never): void {
+  const extra = Object.keys(body).filter((key) => !allowed.includes(key));
+  if (extra.length > 0) {
+    refuse(`${what} may only carry ${allowed.join(', ')}; refused keys: ${extra.map((key) => JSON.stringify(key)).join(', ')}.`);
+  }
+}
+
 const READ_METHODS = new Set(['GET', 'HEAD']);
 const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH']);
 
@@ -93,6 +110,7 @@ function parseBody(body: string | undefined, refuse: (reason: string) => never):
  * - POST /repos/{owner}/{repo}/git/refs creating `refs/heads/canon/<slug>`;
  * - PUT /repos/{owner}/{repo}/contents/<allowed proposal path> on a `canon/<slug>` branch, with no `sha`;
  * - POST /repos/{owner}/{repo}/pulls from `canon/<slug>`, into a non-canon base, with `draft: true`.
+ * Each of those writes may only carry the body keys in CANON_WRITE_BODY_KEYS.
  * Everything else is refused before fetch is called, including any DELETE,
  * tree/blob/commit writes, ref PATCHes, PR edits and PR merges.
  */
@@ -157,6 +175,7 @@ export function createCanonWriteGuard(fetchImpl: FetchLike, options: CanonWriteG
       }
       const body = parseBody(init.body, refuse);
       if ('sha' in body) refuse('contents write carries a sha, which would overwrite an existing file.');
+      refuseUnknownKeys(body, CANON_WRITE_BODY_KEYS.putContents, 'a contents write', refuse);
       if (typeof body.branch !== 'string' || !CANON_BRANCH_PATTERN.test(body.branch)) {
         refuse('contents write must target a canon/<slug> branch.');
       }
@@ -166,6 +185,7 @@ export function createCanonWriteGuard(fetchImpl: FetchLike, options: CanonWriteG
     if (rest === '/git/refs') {
       if (method !== 'POST') refuse(`${method} to /git/refs is not allowed.`);
       const body = parseBody(init.body, refuse);
+      refuseUnknownKeys(body, CANON_WRITE_BODY_KEYS.createRef, 'a ref creation', refuse);
       if (typeof body.ref !== 'string' || !CANON_REF_PATTERN.test(body.ref)) {
         refuse('ref writes may only create refs/heads/canon/<slug>.');
       }
@@ -178,6 +198,7 @@ export function createCanonWriteGuard(fetchImpl: FetchLike, options: CanonWriteG
     if (rest === '/pulls') {
       if (method !== 'POST') refuse(`${method} to /pulls is not allowed.`);
       const body = parseBody(init.body, refuse);
+      refuseUnknownKeys(body, CANON_WRITE_BODY_KEYS.createPull, 'a pull request', refuse);
       if (typeof body.head !== 'string' || !CANON_BRANCH_PATTERN.test(body.head)) refuse('pull requests must come from a canon/<slug> branch.');
       if (typeof body.base !== 'string' || body.base.startsWith('canon/')) refuse('pull requests must target a reviewed base branch, not a canon/ branch.');
       if (body.draft !== true) refuse('pull requests must be drafts.');
