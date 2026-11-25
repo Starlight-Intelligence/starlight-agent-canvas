@@ -36,21 +36,37 @@ export function assertProposalPathAllowed(path: unknown): asserts path is string
   }
 }
 
+/** The only GitHub API this module talks to. GitHub Enterprise is out of scope. */
+export const GITHUB_API_ORIGIN = 'https://api.github.com';
+export const OWNER_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
+export const REPO_PATTERN = /^[A-Za-z0-9_.-]{1,100}$/;
+
 /** The subset of RequestInit this module sends. */
 export interface CanonFetchInit {
   method: string;
   headers: Record<string, string>;
   body?: string;
+  /** Always 'manual': redirects are never followed. The guard forces it. */
+  redirect?: 'manual';
+  signal?: AbortSignal;
 }
 
 /** The subset of Response this module reads. A real `Response` satisfies it. */
 export interface ResponseLike {
   status: number;
+  /** 'opaqueredirect' when a runtime hides a manual redirect behind status 0. */
+  type?: string;
   text(): Promise<string>;
 }
 
 /** The global `fetch` satisfies this. Tests inject a recorder. */
 export type FetchLike = (url: string, init: CanonFetchInit) => Promise<ResponseLike>;
+
+export interface CanonWriteGuardOptions {
+  /** Every request, reads included, must address /repos/{owner}/{repo} on api.github.com. */
+  owner: string;
+  repo: string;
+}
 
 const READ_METHODS = new Set(['GET', 'HEAD']);
 const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH']);
@@ -64,21 +80,30 @@ function parseBody(body: string | undefined, refuse: (reason: string) => never):
     refuse('write body is not valid JSON.');
   }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) refuse('write body must be a JSON object.');
+  // Duplicate keys or other formatting could make GitHub read a different
+  // value than the one checked here, so only the canonical form is forwarded.
+  if (JSON.stringify(parsed) !== body) refuse('write body is not canonical JSON (duplicate keys or extra formatting).');
   return parsed as Record<string, unknown>;
 }
 
 /**
- * Layer 2. Wraps fetch so that, whatever the caller builds, the only writes
- * that reach GitHub are:
- * - POST /repos/{o}/{r}/git/refs creating `refs/heads/canon/<slug>`;
- * - PUT /repos/{o}/{r}/contents/<allowed proposal path> on a `canon/<slug>` branch, with no `sha`;
- * - POST /repos/{o}/{r}/pulls with head `canon/<slug>` and `draft: true`.
- * Everything else that is not a GET or HEAD is refused before fetch is called,
- * including any DELETE, tree/blob/commit writes, ref PATCHes and PR merges.
+ * Layer 2. Wraps fetch so that every request goes to
+ * `https://api.github.com/repos/{owner}/{repo}` with redirects off, and the
+ * only writes that reach GitHub are:
+ * - POST /repos/{owner}/{repo}/git/refs creating `refs/heads/canon/<slug>`;
+ * - PUT /repos/{owner}/{repo}/contents/<allowed proposal path> on a `canon/<slug>` branch, with no `sha`;
+ * - POST /repos/{owner}/{repo}/pulls from `canon/<slug>`, into a non-canon base, with `draft: true`.
+ * Everything else is refused before fetch is called, including any DELETE,
+ * tree/blob/commit writes, ref PATCHes, PR edits and PR merges.
  */
-export function createCanonWriteGuard(fetchImpl: FetchLike, options: { apiBaseUrl: string }): FetchLike {
-  const base = new URL(options.apiBaseUrl);
-  const basePath = base.pathname.replace(/\/+$/, '');
+export function createCanonWriteGuard(fetchImpl: FetchLike, options: CanonWriteGuardOptions): FetchLike {
+  if (typeof options?.owner !== 'string' || !OWNER_PATTERN.test(options.owner)) {
+    throw new CanonGuardError('request', 'the guard needs a valid owner.');
+  }
+  if (typeof options.repo !== 'string' || !REPO_PATTERN.test(options.repo) || options.repo === '.' || options.repo === '..') {
+    throw new CanonGuardError('request', 'the guard needs a valid repo.');
+  }
+  const repoPath = `/repos/${options.owner}/${options.repo}`;
 
   return async (url, init) => {
     const method = String(init?.method ?? 'GET').toUpperCase();
@@ -95,21 +120,23 @@ export function createCanonWriteGuard(fetchImpl: FetchLike, options: { apiBaseUr
     } catch {
       return refuse('URL does not parse.');
     }
-    if (parsed.origin !== base.origin || !parsed.pathname.startsWith(`${basePath}/`)) {
-      refuse('request is not addressed to the configured GitHub API.');
+    if (parsed.origin !== GITHUB_API_ORIGIN || parsed.username || parsed.password) {
+      refuse(`requests may only go to ${GITHUB_API_ORIGIN}.`);
     }
-    if (READ_METHODS.has(method)) return fetchImpl(url, init);
+    if (parsed.pathname !== repoPath && !parsed.pathname.startsWith(`${repoPath}/`)) {
+      refuse(`requests may only address ${repoPath}.`);
+    }
+    const forwarded: CanonFetchInit = { ...init, redirect: 'manual' };
+    if (READ_METHODS.has(method)) return fetchImpl(url, forwarded);
 
     // Writes from here on. Refuse traversal in the raw URL before the URL
     // parser normalizes it away, so intent is checked as well as effect.
     if (url.includes('..') || /%2e/i.test(url) || url.includes('\\') || /%5c/i.test(url)) {
       refuse('write URL contains path traversal.');
     }
+    if (parsed.search || parsed.hash) refuse('write URLs carry no query or fragment.');
 
-    const apiPath = parsed.pathname.slice(basePath.length);
-    const match = /^\/repos\/[^/]+\/[^/]+(\/.*)?$/.exec(apiPath);
-    if (!match) refuse('writes outside /repos/{owner}/{repo} are not allowed.');
-    const rest = match![1] ?? '';
+    const rest = parsed.pathname.slice(repoPath.length);
 
     if (rest.startsWith('/contents/') || rest === '/contents') {
       if (method !== 'PUT') refuse(`${method} to /contents/ is not allowed; only PUT creating a new proposal file.`);
@@ -133,7 +160,7 @@ export function createCanonWriteGuard(fetchImpl: FetchLike, options: { apiBaseUr
       if (typeof body.branch !== 'string' || !CANON_BRANCH_PATTERN.test(body.branch)) {
         refuse('contents write must target a canon/<slug> branch.');
       }
-      return fetchImpl(url, init);
+      return fetchImpl(url, forwarded);
     }
 
     if (rest === '/git/refs') {
@@ -142,7 +169,7 @@ export function createCanonWriteGuard(fetchImpl: FetchLike, options: { apiBaseUr
       if (typeof body.ref !== 'string' || !CANON_REF_PATTERN.test(body.ref)) {
         refuse('ref writes may only create refs/heads/canon/<slug>.');
       }
-      return fetchImpl(url, init);
+      return fetchImpl(url, forwarded);
     }
     if (rest.startsWith('/git/refs/')) refuse('updating an existing ref can move a branch and is never allowed.');
     if (/^\/git\/(trees|blobs|commits)(\/|$)/.test(rest)) refuse('tree, blob and commit writes can change arbitrary files and are never allowed.');
@@ -152,8 +179,9 @@ export function createCanonWriteGuard(fetchImpl: FetchLike, options: { apiBaseUr
       if (method !== 'POST') refuse(`${method} to /pulls is not allowed.`);
       const body = parseBody(init.body, refuse);
       if (typeof body.head !== 'string' || !CANON_BRANCH_PATTERN.test(body.head)) refuse('pull requests must come from a canon/<slug> branch.');
+      if (typeof body.base !== 'string' || body.base.startsWith('canon/')) refuse('pull requests must target a reviewed base branch, not a canon/ branch.');
       if (body.draft !== true) refuse('pull requests must be drafts.');
-      return fetchImpl(url, init);
+      return fetchImpl(url, forwarded);
     }
 
     return refuse('write is not on the canon proposal allowlist.');

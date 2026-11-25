@@ -4,7 +4,7 @@ Status: proposed by lane L5 on 2026-11-25 for issue #63. Owner: lane L2 (`apps/w
 
 ## Why
 
-L2's current design puts Cloudflare Access in front of the Worker (an Access JWT, or an Access service token sent as `CF-Access-Client-Id` and `CF-Access-Client-Secret`) and checks a static bearer token in `Authorization`. Claude Code and Codex can send both, because both let the user set arbitrary headers from environment variables.
+The design L2 was briefed to build for #63 (not yet on any branch, so unconfirmed against code) puts Cloudflare Access in front of the Worker (an Access JWT, or an Access service token sent as `CF-Access-Client-Id` and `CF-Access-Client-Secret`) and checks a static bearer token in `Authorization`. Claude Code and Codex can send both, because both let the user set arbitrary headers from environment variables.
 
 ChatGPT cannot. Its custom MCP servers support only OAuth, no authentication, or a per-tool mix of the two. OpenAI's auth guide (https://developers.openai.com/plugins/build/auth.md, read 2026-11-25) states that ChatGPT does not support machine-to-machine OAuth grants such as client credentials and cannot present custom API keys. The only credential it ever sends is an OAuth access token it obtained itself, as `Authorization: Bearer <token>`. So under the current design ChatGPT is stopped by Access, and would be rejected by the static-bearer check even past Access. "No authentication" is not acceptable for a server with write tools.
 
@@ -20,7 +20,7 @@ All URLs below assume one stable public origin, written `https://<host>`. Use a 
 2. With no token, or an invalid one, answer `401` with
    `WWW-Authenticate: Bearer resource_metadata="https://<host>/.well-known/oauth-protected-resource", scope="world:read world:write"`.
 3. Validate on every request: signature or token lookup, `iss`, `aud` equal to the `resource` value in R2 exactly, `exp` and `nbf`, and scopes. Enforce scopes in the handler; Cloudflare's securing guide says advertised required scopes are not enforced for you (https://developers.cloudflare.com/agents/model-context-protocol/guides/securing-mcp-server/, read by our research agent 2026-11-25).
-4. Map the token to the `Actor` used by `applyOps` (spec 4): `harness` from the OAuth client (`chatgpt` for ChatGPT's client id, `claude` for Claude's, `codex` for Codex), `actor` from the user's stable subject. Never take harness or actor from tool arguments.
+4. Map the token to the `Actor` used by `applyOps` (spec 4): `actor` from the user's stable subject, `harness` from a client identity the client cannot fake. That means the CIMD `client_id` URL (`https://chatgpt.com/oauth/client.json` or `https://chatgpt.com/oauth/{callback_id}/client.json` gives `chatgpt`; `https://chatgpt.com/oauth/codex/...` gives `codex`) or the registered redirect URI (`https://chatgpt.com/connector...` gives `chatgpt`, `https://claude.ai/api/mcp/auth_callback` gives `claude`). Never use the self-asserted `client_name`, because any DCR client can claim any name. When no trusted mapping applies, use a neutral slug such as `mcp-client`. Never take harness or actor from tool arguments.
 
 ### R2. `GET /.well-known/oauth-protected-resource` (RFC 9728)
 
@@ -32,7 +32,7 @@ All URLs below assume one stable public origin, written `https://<host>`. Use a 
 }
 ```
 
-`resource` must be exactly the URL users paste into ChatGPT, because ChatGPT sends it verbatim as the `resource` parameter.
+`resource` must be exactly the URL users paste into ChatGPT, because ChatGPT sends it verbatim as the `resource` parameter. Because the resource has a path, also serve the same document at `/.well-known/oauth-protected-resource/mcp` (the path-specific location in RFC 9728 section 3.1); `@cloudflare/workers-oauth-provider` handles this for you.
 
 ### R3. Authorization server metadata (RFC 8414)
 
@@ -65,7 +65,7 @@ Serve `GET /.well-known/oauth-authorization-server` (and ideally `/.well-known/o
 
 ### R5. Redirect allowlist
 
-Allow `https://chatgpt.com/connector_platform_oauth_redirect` (the stable URI ChatGPT uses when R4.1 holds). If the stable URI is not in use, the URI is `https://chatgpt.com/connector/oauth/{callback_id}`. The exact value is shown on the ChatGPT server's management page at setup; copy it from there. Add Claude's callback (`https://claude.ai/api/mcp/auth_callback`, per Anthropic's connector docs as read by our research agent) if Claude.ai connectors should work too. Loopback redirects (`http://127.0.0.1/...`, any port) are needed only if Claude Code or Codex users switch from bearer to OAuth.
+Allow `https://chatgpt.com/connector_platform_oauth_redirect` (the stable URI ChatGPT uses when R4.1 holds). If the stable URI is not in use, the URI is `https://chatgpt.com/connector/oauth/{callback_id}`. The exact value is shown on the ChatGPT server's management page at setup; copy it from there. Add Claude's callback (`https://claude.ai/api/mcp/auth_callback`, per Anthropic's connector docs as read by our research agent) if Claude.ai connectors should work too. Loopback redirects are needed only if Claude Code or Codex users switch from bearer to OAuth. Allow both `http://localhost:<any port>/callback` and `http://127.0.0.1:<any port>/callback` (Claude Code uses `localhost` by default per https://code.claude.com/docs/en/mcp; Codex uses `http://127.0.0.1/callback`, with a callback id path suffix when issuer identification is not advertised, per https://developers.openai.com/codex/mcp).
 
 ### R6. Where Cloudflare Access sits
 
@@ -75,7 +75,7 @@ Keep Access as the identity provider instead: the documented pattern is an Acces
 
 Recommended implementation: `@cloudflare/workers-oauth-provider` v1, which implements the MCP authorization revision with CIMD, DCR and RFC 9207, wrapping the MCP handler (https://github.com/cloudflare/workers-oauth-provider and https://developers.cloudflare.com/agents/model-context-protocol/authorization/, both read by our research agent 2026-11-25). It needs a KV namespace (`OAUTH_KV` in the examples) and, to fetch CIMD documents, the `global_fetch_strictly_public` compatibility flag.
 
-Not recommended without a test: Cloudflare Access "Managed OAuth" (beta, https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/managed-oauth/, last updated Nov 3, 2026). Nobody has documented ChatGPT working through it, and Cloudflare says not to combine it with a server that runs its own OAuth.
+Not recommended without a test: Cloudflare Access "Managed OAuth" (listed as beta in Cloudflare's docs navigation, https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/managed-oauth/, last updated Nov 3, 2026). We found no report of ChatGPT completing its flow, and Cloudflare says not to combine it with a server that runs its own OAuth.
 
 ### R7. Keep the static bearer path for local agents
 

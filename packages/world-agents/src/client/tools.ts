@@ -201,11 +201,19 @@ export const layoutRegionOutputSchema = z.object({
 
 // import_whiteboard
 
+/** Mirrors L1's ImportLexicon interface exactly. */
+export const importLexiconSchema = z.strictObject({
+  /** Exact title (case-insensitive) to node kind. */
+  kinds: z.record(z.string(), nodeKindSchema).optional(),
+  /** Exact title (case-insensitive) to extra tags. */
+  tags: z.record(z.string(), z.array(z.string())).optional(),
+});
+
 export const importWhiteboardInputSchema = z.strictObject({
   /** Omit to create a new world; pass an existing world id to import into a draft branch. */
   worldId: worldIdSchema.optional(),
   whiteboard: claudeWhiteboardSchema,
-  lexicon: z.looseObject({}).optional(),
+  lexicon: importLexiconSchema.optional(),
 });
 
 export const importWhiteboardOutputSchema = z.object({

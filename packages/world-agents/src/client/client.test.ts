@@ -1,5 +1,8 @@
-import { describe, expect, it, vi } from 'vitest';
+import type { ImportLexicon } from '@starlight-agent-canvas/world';
+import { describe, expect, expectTypeOf, it, vi } from 'vitest';
+import type { z } from 'zod';
 import {
+  importLexiconSchema,
   createWorldClient,
   WORLD_TOOLS,
   WORLD_TOOL_NAMES,
@@ -329,5 +332,83 @@ describe('tool errors', () => {
     expect((error as WorldToolError).isStale).toBe(true);
     expect((error as WorldToolError).expectedVersion).toBe(2);
     expect((error as WorldToolError).actualVersion).toBe(3);
+  });
+});
+
+describe('review fixes', () => {
+  it('sends the parsed input (defaults applied, non-strict nested keys stripped), not the raw input', async () => {
+    const { transport, callTool } = mockTransport({ node, worldVersion: 1 });
+    const client = createWorldClient({ transport, worldId: 'arcanea' });
+    const raw = {
+      node: {
+        kind: 'image' as const,
+        title: 'Plate',
+        position: { x: 1, y: 2, z: 3 } as { x: number; y: number },
+        media: [{ url: 'https://example.com/plate.png', role: 'plate' as const }],
+      },
+    };
+    await client.addNode(raw);
+    const sent = callTool.mock.calls[0]![1];
+    expect(sent).toEqual({
+      worldId: 'arcanea',
+      node: { kind: 'image', title: 'Plate', position: { x: 1, y: 2 }, media: [{ url: 'https://example.com/plate.png', role: 'plate', alt: '' }] },
+    });
+    expect(sent).not.toBe(raw);
+  });
+
+  it.each([
+    ['update_node', 'updateNode', { id: 'n_a', patch: { title: 'A' } }],
+    ['propose_canon', 'proposeCanon', { target: { type: 'node', id: 'n_a' }, note: 'why' }],
+  ])('%s rejects baseVersion 0 and a missing baseVersion', async (_tool, name, base) => {
+    for (const args of [{ ...base, baseVersion: 0 }, base, { ...base, baseVersion: 1.5 }]) {
+      const { transport, callTool } = mockTransport({});
+      const client = createWorldClient({ transport, worldId: 'arcanea' });
+      await expect(method(client, name)(args)).rejects.toBeInstanceOf(WorldClientValidationError);
+      expect(callTool).not.toHaveBeenCalled();
+    }
+  });
+
+  it('move rejects baseVersion 0 and a missing baseVersion on an item', async () => {
+    for (const move of [{ id: 'n_a', baseVersion: 0, position: { x: 0, y: 0 } }, { id: 'n_a', position: { x: 0, y: 0 } }]) {
+      const { transport, callTool } = mockTransport({});
+      const client = createWorldClient({ transport, worldId: 'arcanea' });
+      await expect(method(client, 'move')({ moves: [move] })).rejects.toBeInstanceOf(WorldClientValidationError);
+      expect(callTool).not.toHaveBeenCalled();
+    }
+  });
+
+  it('search.limit must be 1..100', async () => {
+    for (const limit of [0, 101, 2.5]) {
+      const { transport, callTool } = mockTransport({ results: [], worldVersion: 1 });
+      const client = createWorldClient({ transport, worldId: 'arcanea' });
+      await expect(client.search({ query: 'x', limit })).rejects.toBeInstanceOf(WorldClientValidationError);
+      expect(callTool).not.toHaveBeenCalled();
+    }
+    for (const limit of [1, 100]) {
+      const { transport, callTool } = mockTransport({ results: [], worldVersion: 1 });
+      const client = createWorldClient({ transport, worldId: 'arcanea' });
+      await client.search({ query: 'x', limit });
+      expect(callTool).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it('import_whiteboard lexicon matches L1 ImportLexicon and is strict', async () => {
+    expectTypeOf<z.output<typeof importLexiconSchema>>().toEqualTypeOf<ImportLexicon>();
+    const whiteboard = { elements: {} };
+    const bad = [
+      { kinds: { Nero: 'deity' } },
+      { tags: { Nero: 'god' } },
+      { kinds: {}, extra: true },
+      { aliases: { Nero: 'Nero the First' } },
+    ];
+    for (const lexicon of bad) {
+      const { transport, callTool } = mockTransport({ report: {}, worldId: 'w' });
+      const client = createWorldClient({ transport });
+      await expect(client.importWhiteboard({ whiteboard, lexicon } as never)).rejects.toBeInstanceOf(WorldClientValidationError);
+      expect(callTool).not.toHaveBeenCalled();
+    }
+    const { transport, callTool } = mockTransport({ report: {}, worldId: 'w' });
+    await createWorldClient({ transport }).importWhiteboard({ whiteboard, lexicon: { kinds: { Nero: 'god' }, tags: { Nero: ['first'] } } });
+    expect(callTool).toHaveBeenCalledTimes(1);
   });
 });

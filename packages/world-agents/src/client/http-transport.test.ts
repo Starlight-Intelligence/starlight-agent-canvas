@@ -1,3 +1,4 @@
+import { inspect } from 'node:util';
 import { describe, expect, it, vi } from 'vitest';
 import {
   createWorldClient,
@@ -28,6 +29,19 @@ const json = (body: unknown, init: ResponseInit = {}) =>
   new Response(JSON.stringify(body), { status: 200, ...init, headers: { 'content-type': 'application/json', ...(init.headers ?? {}) } });
 
 const sse = (text: string) => new Response(text, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+
+/** An SSE response delivered in exactly these chunks, then closed (or left open). */
+function sseChunks(chunks: string[], { close = true } = {}) {
+  const encoder = new TextEncoder();
+  let i = 0;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (i < chunks.length) controller.enqueue(encoder.encode(chunks[i++]!));
+      else if (close) controller.close();
+    },
+  });
+  return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+}
 
 const initResult = (id: number, session = 'sess-1') =>
   json({ jsonrpc: '2.0', id, result: { protocolVersion: MCP_PROTOCOL_VERSION, capabilities: { tools: {} }, serverInfo: { name: 'world', version: '1' } } }, { headers: { 'mcp-session-id': session } });
@@ -232,8 +246,8 @@ describe('HttpMcpTransport responses', () => {
   });
 
   it('maps a JSON-RPC error to a WorldToolError', async () => {
-    const server = fakeServer((s) => json({ jsonrpc: '2.0', id: s.body.id, error: { code: -32602, message: 'Unknown tool: nope' } }));
-    const error = await transport(server.fetch).callTool('nope', {}).catch((e: unknown) => e) as WorldToolError;
+    const server = fakeServer((s) => json({ jsonrpc: '2.0', id: s.body.id, error: { code: -32602, message: 'Invalid params' } }));
+    const error = await transport(server.fetch).callTool('search', {}).catch((e: unknown) => e) as WorldToolError;
     expect(error).toBeInstanceOf(WorldToolError);
     expect(error.code).toBe('RPC_ERROR');
     expect(error.rpcCode).toBe(-32602);
@@ -430,6 +444,172 @@ describe('HttpMcpTransport secrets', () => {
       for (const spy of spies) expect(spy).not.toHaveBeenCalled();
     } finally {
       for (const spy of spies) spy.mockRestore();
+    }
+  });
+});
+
+describe('HttpMcpTransport review fixes', () => {
+  it('keeps env and fetch out of JSON.stringify, String and util.inspect', async () => {
+    const server = fakeServer((s) => toolResult(s.body.id!, { structuredContent: {} }));
+    const t = transport(server.fetch);
+    await t.callTool('get_world', {});
+    const views = [JSON.stringify(t), String(t), inspect(t, { depth: 5, showHidden: true })];
+    for (const view of views) {
+      for (const secret of SECRETS) expect(view).not.toContain(secret);
+      expect(view).not.toContain('sess-1');
+    }
+    expect(JSON.parse(views[0]!)).toEqual({
+      url: URL_,
+      tokenEnvVar: 'WORLD_CANVAS_TOKEN',
+      headerNames: ['CF-Access-Client-Id', 'CF-Access-Client-Secret'],
+    });
+  });
+
+  it('does not follow redirects and does not show the Location', async () => {
+    const location = `https://evil.example/steal?t=${TOKEN}`;
+    for (const status of [301, 302, 303, 307, 308]) {
+      // The body echoes the Location, as many servers do.
+      const fetch = vi.fn(async (_url: string, _init: RequestInit) => new Response(`Redirecting to ${location}`, { status, headers: { location } }));
+      const error = await transport(fetch).callTool('get_world', {}).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(WorldTransportError);
+      expect((error as WorldTransportError).status).toBe(status);
+      expect((error as Error).message).toContain('Redirects are not followed');
+      expect((error as Error).message).not.toContain('evil.example');
+      expectNoSecrets(error);
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(fetch.mock.calls[0]![1].redirect).toBe('manual');
+    }
+  });
+
+  it('treats an opaque redirect or status 0 response as an error', async () => {
+    const opaque = { type: 'opaqueredirect', status: 0, ok: false, headers: new Headers(), body: null } as unknown as Response;
+    for (const reply of [opaque, Response.error()]) {
+      const fetch = vi.fn(async () => reply);
+      const error = await transport(fetch).callTool('get_world', {}).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(WorldTransportError);
+      expect((error as WorldTransportError).status).toBe(0);
+      expect((error as Error).message).toContain('Redirects are not followed');
+    }
+  });
+
+  it('times out a request whose fetch never resolves, and recovers on the next call', async () => {
+    let hang = true;
+    const server = fakeServer((s) => toolResult(s.body.id!, { structuredContent: { ok: true } }));
+    const fetch = vi.fn((url: string, init: RequestInit) => (hang ? new Promise<Response>(() => undefined) : server.fetch(url, init)));
+    const t = transport(fetch, { timeoutMs: 20 });
+    const error = await t.callTool('get_world', {}).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(WorldTransportError);
+    expect((error as Error).message).toContain('initialize timed out after 20 ms');
+    hang = false;
+    await expect(t.callTool('get_world', {})).resolves.toEqual({ ok: true });
+    expect(server.sent.map((s) => s.body.method)).toEqual(['initialize', 'notifications/initialized', 'tools/call']);
+  });
+
+  it('times out an SSE body that never delivers the response', async () => {
+    const server = fakeServer(() => sseChunks([': waiting\n\n'], { close: false }));
+    const error = await transport(server.fetch, { timeoutMs: 30 }).callTool('get_world', {}).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(WorldTransportError);
+    expect((error as Error).message).toContain('tools/call timed out');
+  });
+
+  it('validates timeoutMs', () => {
+    for (const timeoutMs of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => transport(vi.fn(), { timeoutMs })).toThrow(WorldClientConfigError);
+    }
+    expect(() => transport(vi.fn(), { timeoutMs: 1 })).not.toThrow();
+  });
+
+  it('rejects URLs with a query string or fragment', () => {
+    for (const url of [`${URL_}?token=${TOKEN}`, `${URL_}#${TOKEN}`, `${URL_}?`]) {
+      let caught: unknown;
+      try {
+        new HttpMcpTransport({ url, auth: { tokenEnvVar: 'WORLD_CANVAS_TOKEN' }, env });
+      } catch (e) {
+        caught = e;
+      }
+      expect(caught).toBeInstanceOf(WorldClientConfigError);
+      expectNoSecrets(caught);
+    }
+  });
+
+  it('only calls the ten world tools', async () => {
+    const fetch = vi.fn();
+    const t = transport(fetch);
+    for (const name of ['remove_node', 'promote_to_canon', 'tools/list', '']) {
+      await expect(t.callTool(name as never, {})).rejects.toBeInstanceOf(WorldClientConfigError);
+    }
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['STALE_VERSION: node n_x is at 4', 'STALE_VERSION', 'node n_x is at 4'],
+    ['CANON_LOCKED: node n_x is canon', 'CANON_LOCKED', 'node n_x is canon'],
+    ['UNAUTHORIZED: token lacks write scope', 'UNAUTHORIZED', 'token lacks write scope'],
+    ['NOT_A_CODE: whatever', 'TOOL_ERROR', 'NOT_A_CODE: whatever'],
+    ['stale_version: lower case', 'TOOL_ERROR', 'stale_version: lower case'],
+    ['STALE_VERSION without colon', 'TOOL_ERROR', 'STALE_VERSION without colon'],
+  ])('maps text error %j to code %s', async (text, code, message) => {
+    const server = fakeServer((s) => toolResult(s.body.id!, { isError: true, content: [{ type: 'text', text }] }));
+    const error = await transport(server.fetch).callTool('update_node', {}).catch((e: unknown) => e) as WorldToolError;
+    expect(error).toBeInstanceOf(WorldToolError);
+    expect(error.code).toBe(code);
+    expect(error.message).toBe(`update_node failed with ${code}: ${message}`);
+  });
+
+  it('sends the protocol version the server negotiated', async () => {
+    const sent: Sent[] = [];
+    const fetch = vi.fn(async (url: string, init: RequestInit) => {
+      const entry: Sent = { url, headers: { ...(init.headers as Record<string, string>) }, body: JSON.parse(String(init.body)) };
+      sent.push(entry);
+      if (entry.body.method === 'initialize') {
+        return json({ jsonrpc: '2.0', id: entry.body.id, result: { protocolVersion: '2025-06-18', capabilities: {} } }, { headers: { 'mcp-session-id': 's' } });
+      }
+      if (entry.body.method === 'notifications/initialized') return accepted();
+      return toolResult(entry.body.id!, { structuredContent: {} });
+    });
+    await transport(fetch).callTool('get_world', {});
+    expect((sent[0]!.body.params as { protocolVersion: string }).protocolVersion).toBe('2025-11-25');
+    expect(sent[1]!.headers['MCP-Protocol-Version']).toBe('2025-06-18');
+    expect(sent[2]!.headers['MCP-Protocol-Version']).toBe('2025-06-18');
+  });
+
+  it('parses CRLF split across chunks inside a multi-line data event', async () => {
+    const server = fakeServer((s) => sseChunks([
+      'event: message\r\ndata: {"jsonrpc":"2.0",\r',
+      `\ndata: "id":${s.body.id},\r`,
+      '\ndata: "result":{"structuredContent":{"split":true}}}\r',
+      '\n\r',
+      '\n',
+    ], { close: false }));
+    await expect(transport(server.fetch).callTool('search', {})).resolves.toEqual({ split: true });
+  });
+
+  it('dispatches a final SSE event with no trailing blank line', async () => {
+    const server = fakeServer((s) => sseChunks([
+      `data: {"jsonrpc":"2.0","id":${s.body.id},`,
+      '"result":{"structuredContent":{"last":true}}}',
+    ]));
+    await expect(transport(server.fetch).callTool('search', {})).resolves.toEqual({ last: true });
+  });
+
+  it('works with globalThis.process deleted when env is passed', async () => {
+    const saved = globalThis.process;
+    const server = fakeServer((s) => toolResult(s.body.id!, { structuredContent: { ok: true } }));
+    Reflect.deleteProperty(globalThis, 'process');
+    try {
+      expect((globalThis as { process?: unknown }).process).toBeUndefined();
+      const withEnv = new HttpMcpTransport({ url: URL_, auth: { tokenEnvVar: 'WORLD_CANVAS_TOKEN' }, env, fetch: server.fetch });
+      const result = await withEnv.callTool('get_world', {});
+      const noEnvFetch = vi.fn();
+      const withoutEnv = new HttpMcpTransport({ url: URL_, auth: { tokenEnvVar: 'WORLD_CANVAS_TOKEN' }, fetch: noEnvFetch });
+      const error = await withoutEnv.callTool('get_world', {}).catch((e: unknown) => e);
+      globalThis.process = saved;
+      expect(result).toEqual({ ok: true });
+      expect(server.sent[2]!.headers.Authorization).toBe(`Bearer ${TOKEN}`);
+      expect(error).toBeInstanceOf(WorldClientConfigError);
+      expect(noEnvFetch).not.toHaveBeenCalled();
+    } finally {
+      globalThis.process = saved;
     }
   });
 });

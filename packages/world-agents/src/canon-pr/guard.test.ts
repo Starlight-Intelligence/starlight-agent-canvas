@@ -58,7 +58,10 @@ function github(checkFileStatus = 404) {
     if (init.method === 'GET' && path.includes('/git/ref/heads/')) return Response.json({ object: { sha: SHA } });
     if (init.method === 'GET' && path.includes('/contents/')) return new Response('{}', { status: checkFileStatus });
     if (init.method === 'GET') return Response.json({ default_branch: 'main' });
-    if (path.endsWith('/pulls')) return Response.json({ number: 7, html_url: 'https://github.com/x/y/pull/7' }, { status: 201 });
+    if (path.endsWith('/pulls')) {
+      const [, , owner, repo] = path.split('/');
+      return Response.json({ number: 7, html_url: `https://github.com/${owner}/${repo}/pull/7` }, { status: 201 });
+    }
     return Response.json({}, { status: 201 });
   };
   return { fetch, calls };
@@ -133,11 +136,13 @@ describe('layer 2: createCanonWriteGuard', () => {
 
   function guarded() {
     const passed: string[] = [];
+    const inits: CanonFetchInit[] = [];
     const inner = async (url: string, init: CanonFetchInit) => {
       passed.push(`${init.method} ${url}`);
+      inits.push(init);
       return new Response('{}', { status: 200 });
     };
-    return { fetch: createCanonWriteGuard(inner, { apiBaseUrl: API }), passed };
+    return { fetch: createCanonWriteGuard(inner, { owner: 'Arcanea-Labs', repo: 'arcanea-ai-app' }), passed, inits };
   }
 
   const json = (value: unknown) => JSON.stringify(value);
@@ -154,6 +159,14 @@ describe('layer 2: createCanonWriteGuard', () => {
     const g = guarded();
     await g.fetch(url, { method, headers: {}, ...(body ? { body } : {}) });
     expect(g.passed).toEqual([`${method} ${url}`]);
+    expect(g.inits[0]!.redirect).toBe('manual');
+  });
+
+  it('needs a valid owner and repo to pin', () => {
+    const inner = async () => new Response('{}');
+    for (const pin of [{ owner: '', repo: 'r' }, { owner: 'o/x', repo: 'r' }, { owner: 'o', repo: '..' }, { owner: 'o', repo: 'r/x' }]) {
+      expect(() => createCanonWriteGuard(inner, pin)).toThrow(CanonGuardError);
+    }
   });
 
   it.each([
@@ -190,9 +203,27 @@ describe('layer 2: createCanonWriteGuard', () => {
     ['edit a PR', 'PATCH', `${REPO}/pulls/1`, json({ draft: false })],
     ['comment on an issue', 'POST', `${REPO}/issues/1/comments`, json({ body: 'approved' })],
     ['repo settings', 'PATCH', `${REPO}`, json({ default_branch: 'canon/x' })],
+    ['PATCH /pulls', 'PATCH', `${REPO}/pulls`, json({ head: 'canon/x', base: 'main', draft: true })],
+    ['PR into a canon/ base', 'POST', `${REPO}/pulls`, json({ head: 'canon/x', base: 'canon/other', draft: true })],
+    ['PR without a base', 'POST', `${REPO}/pulls`, json({ head: 'canon/x', draft: true })],
+    ['duplicate keys hiding a main branch', 'PUT', contentsUrl, '{"message":"m","content":"eA==","branch":"main","branch":"canon/x"}'],
+    ['duplicate keys hiding a main ref', 'POST', `${REPO}/git/refs`, `{"ref":"refs/heads/main","ref":"refs/heads/canon/x","sha":"${SHA}"}`],
+    ['non-canonical JSON formatting', 'POST', `${REPO}/git/refs`, JSON.stringify({ ref: 'refs/heads/canon/x', sha: SHA }, null, 2)],
+    ['a write with a query string', 'POST', `${REPO}/git/refs?force=true`, json({ ref: 'refs/heads/canon/x', sha: SHA })],
     ['a write outside /repos', 'POST', `${API}/gists`, json({ files: {} })],
-    ['another host', 'PUT', `https://evil.example.com/repos/o/r/contents/${GOOD_PATH}`, json(putBody)],
-    ['a read on another host', 'GET', 'https://evil.example.com/repos/o/r', undefined],
+    ['a read outside /repos', 'GET', `${API}/user`, undefined],
+    ['a read of another repo', 'GET', `${API}/repos/Arcanea-Labs/other-repo`, undefined],
+    ['a read of a repo sharing the prefix', 'GET', `${API}/repos/Arcanea-Labs/arcanea-ai-app-evil`, undefined],
+    ['a read of another owner', 'GET', `${API}/repos/evil/arcanea-ai-app/contents/x`, undefined],
+    ['a differently cased owner', 'GET', `${API}/repos/arcanea-labs/arcanea-ai-app`, undefined],
+    ['a read escaping the repo with ..', 'GET', `${REPO}/../other-repo`, undefined],
+    ['a write to another repo', 'PUT', `${API}/repos/Arcanea-Labs/other-repo/contents/${GOOD_PATH}`, json(putBody)],
+    ['another host', 'PUT', `https://evil.example.com/repos/Arcanea-Labs/arcanea-ai-app/contents/${GOOD_PATH}`, json(putBody)],
+    ['a read on another host', 'GET', 'https://evil.example.com/repos/Arcanea-Labs/arcanea-ai-app', undefined],
+    ['plain http', 'GET', 'http://api.github.com/repos/Arcanea-Labs/arcanea-ai-app', undefined],
+    ['another port', 'GET', 'https://api.github.com:8443/repos/Arcanea-Labs/arcanea-ai-app', undefined],
+    ['userinfo in the URL', 'GET', 'https://user:pass@api.github.com/repos/Arcanea-Labs/arcanea-ai-app', undefined],
+    ['a host that only starts with api.github.com', 'GET', 'https://api.github.com.evil.example/repos/Arcanea-Labs/arcanea-ai-app', undefined],
   ])('refuses %s', async (_label, method, url, body) => {
     const g = guarded();
     await expect(g.fetch(url, { method, headers: {}, ...(body !== undefined ? { body } : {}) }))

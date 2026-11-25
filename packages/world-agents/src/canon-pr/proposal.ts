@@ -41,10 +41,33 @@ function oneLine(text: string): string {
   return text.replace(/\s+/g, ' ').trim();
 }
 
-/** Untrusted text placed inline (table cells, list items, headings): one line, pipes escaped, no raw HTML. */
-function inline(text: string): string {
-  return oneLine(text).replace(/\|/g, '\\|').replace(/</g, '&lt;');
+/**
+ * Things GitHub turns live even after backslash escaping, because it links
+ * them in the rendered text: URLs, @mentions, #123 and owner/repo#123
+ * references, GH-123. These go into code spans, where GitHub links nothing.
+ * None of the patterns can contain a backtick or a pipe.
+ */
+const LIVE_TOKEN = /https?:\/\/[^\s`|()<>[\]"']+|www\.[^\s`|()<>[\]"']+|[@#][A-Za-z0-9][\w./-]*|\bGH-\d+\b/gi;
+/** Markdown punctuation that can start links, images, emphasis, HTML, entities, math or table cells. */
+const MARKDOWN_PUNCTUATION = /[\\`*_[\]()!#@&~<>|$]/g;
+
+/**
+ * Untrusted text placed inline (table cells, list items, headings): one line,
+ * Markdown punctuation backslash-escaped so it renders literally, and
+ * URLs, mentions and issue references in code spans so they cannot link, ping or close issues.
+ */
+export function inlineMarkdown(text: string): string {
+  const line = oneLine(text);
+  let out = '';
+  let last = 0;
+  for (const match of line.matchAll(LIVE_TOKEN)) {
+    out += line.slice(last, match.index).replace(MARKDOWN_PUNCTUATION, '\\$&');
+    out += `\`${match[0]}\``;
+    last = match.index + match[0].length;
+  }
+  return out + line.slice(last).replace(MARKDOWN_PUNCTUATION, '\\$&');
 }
+const inline = inlineMarkdown;
 
 /**
  * Untrusted multi-line text as a fenced code block. The fence is longer than

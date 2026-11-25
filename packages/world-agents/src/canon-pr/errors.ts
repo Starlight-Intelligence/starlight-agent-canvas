@@ -56,22 +56,52 @@ export type CanonPrErrorCode =
   | 'INVALID_TOKEN'
   | 'TOKEN_UNAVAILABLE'
   | 'NETWORK_ERROR'
+  | 'TIMEOUT'
+  | 'REDIRECT'
   | 'HTTP_ERROR'
   | 'BRANCH_EXISTS'
   | 'FILE_EXISTS'
   | 'INVALID_RESPONSE';
 
+/** One GitHub request that got a response. Never includes headers or the token. */
+export interface ExecutedCall {
+  step: Exclude<CanonPrStep, 'setup' | 'token'>;
+  method: 'GET' | 'POST' | 'PUT';
+  path: string;
+  status: number;
+  purpose: string;
+}
+
+export interface CanonPrErrorDetails {
+  status?: number;
+  githubMessage?: string;
+  /** Set when the failure came after the canon branch was created; the branch was left in place. */
+  branch?: string;
+  path?: string;
+  /** Requests made before the failure, set together with `branch`. */
+  calls?: readonly ExecutedCall[];
+}
+
 /** Opening the draft PR failed at `step`. `status` and `githubMessage` are set for HTTP failures. */
 export class CanonPrError extends Error {
   override readonly name = 'CanonPrError';
+  readonly status?: number;
+  readonly githubMessage?: string;
+  readonly branch?: string;
+  readonly path?: string;
+  readonly calls?: readonly ExecutedCall[];
 
   constructor(
     readonly code: CanonPrErrorCode,
     readonly step: CanonPrStep,
     message: string,
-    readonly status?: number,
-    readonly githubMessage?: string,
+    details: CanonPrErrorDetails = {},
   ) {
     super(message);
+    this.status = details.status;
+    this.githubMessage = details.githubMessage;
+    this.branch = details.branch;
+    this.path = details.path;
+    this.calls = details.calls;
   }
 }

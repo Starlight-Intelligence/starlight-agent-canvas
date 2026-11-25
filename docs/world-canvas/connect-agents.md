@@ -13,16 +13,16 @@ Vendor docs change often. Every claim below names its source and the date it was
 | Claude Code | Yes, with a bearer header, plus Access service-token headers if Access fronts `/mcp` | `.mcp.json` (project) or `~/.claude.json` |
 | Codex CLI, IDE extension, ChatGPT desktop app | Yes, same as above | `~/.codex/config.toml` or `.codex/config.toml` (trusted projects) |
 | Codex Cloud | No. Cloud tasks have no documented way to use MCP servers | none |
-| ChatGPT (web, custom MCP server / plugin) | No. ChatGPT only does OAuth or no auth | ChatGPT Plugins UI |
+| ChatGPT (web, custom MCP server / plugin) | Not directly. ChatGPT only does OAuth or no auth (an untested tunnel route exists, see below) | ChatGPT Plugins UI |
 | Claude.ai and Claude Desktop custom connectors | Not without changes. They connect from Anthropic's cloud and default to OAuth | Claude settings, Connectors |
 
-The short version for L2: local agents work today with a bearer token. ChatGPT needs a standard MCP OAuth surface on the Worker. The follow-up spec is in [chatgpt-oauth-followup.md](./chatgpt-oauth-followup.md).
+"L2's current design" on this page means the design L2 was briefed to build for issue #63: Cloudflare Access in front of the Worker plus a static bearer token. L2's code is not on any branch yet, so this is unconfirmed against code. The short version for L2: local agents can work with a bearer token. ChatGPT needs a standard MCP OAuth surface on the Worker. The follow-up spec is in [chatgpt-oauth-followup.md](./chatgpt-oauth-followup.md).
 
 ## Values used on this page
 
 | Name | Meaning |
 | --- | --- |
-| `https://world.example.workers.dev/mcp` | Placeholder. Replace with the real L2 endpoint once it is deployed. |
+| `https://world.example.workers.dev/mcp` | Placeholder. Replace with the real L2 endpoint once it is deployed. If L2 adopts option R7(b) of the OAuth follow-up, the static-bearer URL for local agents is a different hostname from the OAuth URL that ChatGPT uses. |
 | `WORLD_CANVAS_URL` | Optional env var for the endpoint. |
 | `WORLD_CANVAS_TOKEN` | Env var holding the static bearer token that L2 issues. Never commit its value. |
 | `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET` | Env vars holding a Cloudflare Access service token, only if L2 puts Access in front of `/mcp`. |
@@ -71,7 +71,7 @@ claude mcp add-json --scope project world-canvas \
   '{"type":"http","url":"https://world.example.workers.dev/mcp","headers":{"Authorization":"Bearer ${WORLD_CANVAS_TOKEN}"}}'
 ```
 
-Use `add-json` (or edit `.mcp.json` by hand) with single quotes so the file stores `${WORLD_CANVAS_TOKEN}`, not the token. Do not run `claude mcp add --transport http ... --header "Authorization: Bearer $WORLD_CANVAS_TOKEN"` with `--scope project`: the shell expands the variable first and the token is written into `.mcp.json` in plain text. For a private setup, the default `local` scope stores the entry in `~/.claude.json` instead.
+Single quotes stop your shell from expanding the variable. Whether the Claude Code CLI then stores the `${WORLD_CANVAS_TOKEN}` text unexpanded is not stated in the docs and we could not test it (unverified), so the safest path is to edit `.mcp.json` by hand and then check the file. Never run `claude mcp add --transport http ... --header "Authorization: Bearer $WORLD_CANVAS_TOKEN"` with double quotes in any scope: the shell expands the variable first and the token is written in plain text, into `.mcp.json` for `project` scope or `~/.claude.json` for `local` and `user` scope.
 
 Scopes: `local` (default, this project, stored in `~/.claude.json`), `project` (shared, stored in `.mcp.json`), `user` (all your projects, stored in `~/.claude.json`).
 
@@ -123,7 +123,7 @@ codex mcp add world-canvas --url https://world.example.workers.dev/mcp --bearer-
 codex mcp list
 ```
 
-The `--url` and `--bearer-token-env-var` flags come from consistent secondary sources because the CLI reference page did not load in full for us (unconfirmed). Run `codex mcp add --help` on your build to confirm. The `env_http_headers` line still has to be added by hand.
+Our reviewer confirmed the `--url` and `--bearer-token-env-var` flags in the Codex source (`codex-rs/cli/src/mcp_cmd.rs`) and https://developers.openai.com/codex/cli/reference on 2026-11-25. Run `codex mcp add --help` on your build if it is older. The `env_http_headers` line still has to be added by hand.
 
 In the desktop app: Settings, MCP servers, Add server, choose Streamable HTTP, enter the URL, save, then Restart (same OpenAI page). Type `/mcp` in the composer to see connected servers.
 
@@ -131,7 +131,7 @@ In the desktop app: Settings, MCP servers, Add server, choose Streamable HTTP, e
 
 Sources: https://learn.chatgpt.com/codex/environments/cloud-environments and https://developers.openai.com/codex/cloud/environments/, fetched 2026-11-25; open issues https://github.com/openai/codex/issues/57061 and https://github.com/openai/codex/issues/45264.
 
-Codex Cloud tasks cannot use this MCP server today. OpenAI's cloud environment docs cover setup scripts, environment variables, network secrets, internet allowlists, Tailscale and OIDC, and say nothing about MCP servers. The Codex MCP page lists the desktop app, CLI and IDE extension as the clients that share MCP configuration, and does not list cloud tasks. Open GitHub issues on `openai/codex` ask for MCP in cloud tasks. OpenAI does not state the absence in one sentence, so this is a strong inference from the docs plus the open issues, as of 2026-11-25.
+There is no documented way for Codex Cloud tasks to use this MCP server today. OpenAI's cloud environment docs cover setup scripts, environment variables, network secrets, internet allowlists, Tailscale and OIDC, and say nothing about MCP servers. The Codex MCP page lists the desktop app, CLI and IDE extension as the clients that share MCP configuration, and does not list cloud tasks. Open issue #57061 on `openai/codex` reports that cloud tasks cannot see remote MCP servers installed in ChatGPT; #45264 mentions in passing that there is no way to attach MCP servers in Cloud. OpenAI does not state the absence in one sentence, so this is a strong inference from the docs plus the open issues, as of 2026-11-25.
 
 What to do instead: run world edits from Codex CLI, the IDE extension or the desktop app. If a cloud task must reach the world, the only route is plain HTTPS from the task's shell (for example a script using `@starlight-agent-canvas/world-agents`), which needs the Worker hostname on the environment's internet allowlist and the token as a network secret. That is not MCP and we have not tested it.
 
@@ -139,13 +139,15 @@ What to do instead: run world edits from Codex CLI, the IDE extension or the des
 
 Sources, all fetched 2026-11-25: https://developers.openai.com/plugins/build/auth.md (read in full by the lane lead), https://developers.openai.com/api/docs/guides/developer-mode (custom MCP server guide, read by our research agent), https://developers.openai.com/codex/mcp.
 
-### Plain answer: ChatGPT cannot connect to L2's current design
+### Plain answer: ChatGPT cannot connect directly to L2's current design
 
 ChatGPT's custom MCP servers support OAuth, no authentication, or a mix of the two per tool. OpenAI's auth guide says ChatGPT does not support machine-to-machine OAuth grants such as client credentials, and cannot present custom API keys. So ChatGPT cannot send our static bearer token, and it cannot send Cloudflare Access service-token headers. Behind an Access login wall its requests are stopped before they reach the Worker (our inference: Access answers non-browser clients without a valid token with a login redirect). Even past Access, the only bearer ChatGPT ever sends is an OAuth access token it obtained itself.
 
 "No authentication" is not an option for this server: anyone who knows the URL could write to the world.
 
-To support ChatGPT, L2 must add a standard MCP OAuth 2.1 surface. The precise follow-up is [chatgpt-oauth-followup.md](./chatgpt-oauth-followup.md).
+One untested route exists: the custom MCP server form also offers a Tunnel connection (OpenAI's Secure MCP Tunnel, https://developers.openai.com/api/docs/guides/secure-mcp-tunnels), and OpenAI's tunnel-client onboarding notes say configured request headers are forwarded to the private server. It needs a host running the tunnel client and we have not verified it with a static bearer, so do not plan on it.
+
+To support ChatGPT properly, L2 must add a standard MCP OAuth 2.1 surface. The precise follow-up is [chatgpt-oauth-followup.md](./chatgpt-oauth-followup.md).
 
 ### Setup once L2 ships OAuth
 
@@ -170,7 +172,8 @@ Code that calls the OpenAI API directly (not the ChatGPT app) can pass an `autho
 | Login page HTML or a 302 instead of JSON | Cloudflare Access is in front of `/mcp` and the service-token headers are missing or the Access app has no Service Auth policy. |
 | Claude Code shows the server as pending | Project server not approved yet. Start `claude` interactively and approve it. |
 | `STALE_VERSION` from a write tool | Someone changed the node first. Re-read it and retry with the new `baseVersion` (spec 4.1). |
-| `CANON_FORBIDDEN` or `CANON_LOCKED` | An op tried to set or change canon. Use `propose_canon` instead (spec 3). |
+| `CANON_FORBIDDEN` | An op tried to set canon status `canon`. Use `propose_canon` instead (spec 3). |
+| `CANON_LOCKED` | The target is already canon. It cannot be changed or proposed again through ops; changing canon needs a change to the canon files in git, approved by the Creator. |
 
 ## Sources
 
@@ -182,7 +185,9 @@ Code that calls the OpenAI API directly (not the ChatGPT app) can pass an `autho
 | https://developers.openai.com/codex/mcp | Codex config.toml keys, shared config, OAuth login | 2026-11-25 |
 | https://developers.openai.com/codex/config-reference | Project config only in trusted projects | 2026-11-25 |
 | https://learn.chatgpt.com/codex/environments/cloud-environments | Codex Cloud environment features (no MCP) | 2026-11-25 |
-| https://github.com/openai/codex/issues/57061, https://github.com/openai/codex/issues/45264 | Open requests for MCP in cloud tasks | 2026-11-25 |
+| https://github.com/openai/codex/issues/57061, https://github.com/openai/codex/issues/45264 | Open issues on MCP in cloud tasks | 2026-11-25 |
+| https://developers.openai.com/codex/cli/reference | `codex mcp add` flags | 2026-11-25 |
+| https://developers.openai.com/api/docs/guides/secure-mcp-tunnels | ChatGPT tunnel connection option | 2026-11-25 |
 | https://developers.openai.com/plugins/build/auth.md | ChatGPT OAuth requirements, no API keys, redirect URIs | 2026-11-25 |
 | https://developers.openai.com/api/docs/guides/developer-mode | ChatGPT custom MCP server setup, transports, write confirmations | 2026-11-25 |
 | https://developers.openai.com/api/docs/guides/tools-connectors-mcp | Responses API `mcp` tool `authorization` | 2026-11-25 |

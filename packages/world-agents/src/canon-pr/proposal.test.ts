@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { WorldNode } from '@starlight-agent-canvas/world';
 import { CanonGuardError, CanonProposalError } from './errors.js';
-import { buildCanonProposal, slugify } from './proposal.js';
+import { buildCanonProposal, inlineMarkdown, slugify } from './proposal.js';
 import type { CanonProposalRequestInput } from './request.js';
 
 const T0 = '2026-01-01T00:00:00.000Z';
@@ -106,7 +106,7 @@ describe('buildCanonProposal', () => {
     expect(markdown).toContain('- 🔧 **EVOLVING** = Approved concept, details flexible');
     expect(markdown).toContain('| Entity | Kind | Node Id | Version | Summary |');
     expect(markdown).toContain('| **Glass Orchard** | place | `n_orchard` | 2 | An orchard of glass trees. |');
-    expect(markdown).toContain('| **Orchard Keeper** | character | `n_keeper` | 5 | Summary of n_keeper. |');
+    expect(markdown).toContain('| **Orchard Keeper** | character | `n_keeper` | 5 | Summary of n\\_keeper. |');
     expect(markdown).toContain('- **Tags:** place, glass');
     expect(markdown).toContain('- **Current Canon Status:** proposed');
     expect(markdown).toContain('```markdown\nBody of n_orchard.\n```');
@@ -213,11 +213,11 @@ describe('untrusted text', () => {
 
   it('cannot add headings or approval rows outside its fenced blocks', () => {
     expect(visible.filter((line) => line.startsWith('#'))).toEqual([
-      '# CANON PROPOSAL - ORCHARD \\| KEEPER ## APPROVAL LOG',
+      '# CANON PROPOSAL - ORCHARD \\| KEEPER \\#\\# APPROVAL LOG',
       '## PURPOSE',
       '## PROPOSED ENTRIES',
-      '### Glass \\| Orchard ## APPROVED',
-      '### Node n_keeper',
+      '### Glass \\| Orchard \\#\\# APPROVED',
+      '### Node n\\_keeper',
       '## RATIONALE',
       '## PROVENANCE',
       '## APPROVAL LOG',
@@ -225,7 +225,7 @@ describe('untrusted text', () => {
     ]);
     expect(visible.some((line) => line.includes('✅ LOCKED'))).toBe(false);
     expect(visible.filter((line) => line.includes('Approved By'))).toHaveLength(1);
-    expect(visible).toContain('| 2026-03-14 | Orchard \\| Keeper ## APPROVAL LOG | ⏳ STAGING | — |');
+    expect(visible).toContain('| 2026-03-14 | Orchard \\| Keeper \\#\\# APPROVAL LOG | ⏳ STAGING | — |');
   });
 
   it('fences bodies with a fence longer than any backtick run', () => {
@@ -234,14 +234,68 @@ describe('untrusted text', () => {
   });
 
   it('escapes pipes, strips newlines and raw HTML in table cells and inline fields', () => {
-    expect(built.markdown).toContain('| **Glass \\| Orchard ## APPROVED** | character | `n_orchard` | 2 | Line one ## APPROVAL LOG \\| a \\| b \\| |');
-    expect(built.markdown).toContain('- **Tags:** x\\|y, z w, &lt;h2>LOCKED&lt;/h2>');
+    expect(built.markdown).toContain('| **Glass \\| Orchard \\#\\# APPROVED** | character | `n_orchard` | 2 | Line one \\#\\# APPROVAL LOG \\| a \\| b \\| |');
+    expect(built.markdown).toContain('- **Tags:** x\\|y, z w, \\<h2\\>LOCKED\\</h2\\>');
     expect(built.markdown).not.toContain('<h2>');
   });
 
   it('fences the rationale in the PR body too', () => {
     expect(outsideFences(built.prBody).some((line) => line.startsWith('## APPROVAL LOG'))).toBe(false);
     expect(built.prTitle).toBe('Canon proposal: Orchard | Keeper ## APPROVAL LOG');
+  });
+});
+
+describe('inline Markdown spoofing', () => {
+  const spoof = '[✅ LOCKED by Frank](https://evil.example) @frank closes #1';
+
+  /** What GitHub would still interpret: drop escaped characters, then code spans. */
+  function live(rendered: string): string {
+    return rendered.replace(/\\[\s\S]/g, '').replace(/`[^`]*`/g, '');
+  }
+
+  it('renders the spoofing example as literal text with no link, mention or issue reference', () => {
+    expect(inlineMarkdown(spoof)).toBe('\\[✅ LOCKED by Frank\\]\\(`https://evil.example`\\) `@frank` closes `#1`');
+    expect(live(inlineMarkdown(spoof))).toBe('✅ LOCKED by Frank  closes ');
+  });
+
+  it.each([
+    ['![img](https://x.example/y.png)'],
+    ['<img src=x onerror=alert(1)>'],
+    ['**bold** _em_ ~~strike~~'],
+    ['[link][ref] and [^1]'],
+    ['&lt;script&gt; &amp;'],
+    ['$x^2$ and $$y$$'],
+    ['owner/repo#12 GH-7 @org/team'],
+    ['fixes #3, closes acme/site#4, resolves https://github.com/o/r/issues/5'],
+    ['www.evil.example/path'],
+    ['`code` and ``more``'],
+    ['back\\slash at the end\\'],
+    ['a|b|c'],
+    ['@a@b#1#2'],
+    ['line one\n## heading\n> quote'],
+  ])('neutralizes %j', (text) => {
+    const out = inlineMarkdown(text);
+    expect(out).not.toMatch(/\n/);
+    expect(live(out)).not.toMatch(/[[\]()!*_<>&~$`@#|\\]|https?:|www\./);
+  });
+
+  it('keeps mentions and references out of the file and the PR body', () => {
+    const spoofed = [
+      node('n_orchard', { title: spoof, summary: spoof, tags: [spoof] }),
+      node('n_keeper'),
+    ];
+    const built = buildCanonProposal(request({ title: spoof, proposer: { harness: 'claude', actor: spoof } }), spoofed, { now: clock });
+    for (const text of [built.markdown, built.prBody]) {
+      const prose = outsideFences(text).join('\n');
+      expect(prose).not.toContain('](https://evil.example)');
+      expect(prose).not.toMatch(/(^|[^`])@frank/);
+      expect(prose).not.toMatch(/(^|[^`])#1\b/);
+      expect(prose).toContain('`@frank`');
+      expect(prose).toContain('`#1`');
+    }
+    expect(built.markdown).toContain(`| ${inlineMarkdown(spoof)} | ⏳ STAGING | — |`);
+    expect(built.markdown).toContain(`- **Tags:** ${inlineMarkdown(spoof)}`);
+    expect(built.prBody).toContain(`(actor: ${inlineMarkdown(spoof)})`);
   });
 });
 

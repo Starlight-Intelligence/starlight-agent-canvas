@@ -1,11 +1,14 @@
+import type { OpErrorCode } from '@starlight-agent-canvas/world';
 import type { WorldTransport } from './client.js';
 import {
   WorldAuthError,
   WorldClientConfigError,
+  WorldClientError,
   WorldToolError,
   WorldTransportError,
   type WorldToolErrorDetail,
 } from './errors.js';
+import { WORLD_TOOL_NAMES, type WorldToolName } from './tools.js';
 
 /**
  * Minimal MCP Streamable HTTP client for the World Canvas server.
@@ -24,6 +27,27 @@ const HEADER_NAME_PATTERN = /^[A-Za-z0-9-]{1,128}$/;
 const RESERVED_HEADERS = new Set(['authorization', 'content-type', 'accept', 'mcp-session-id', 'mcp-protocol-version', 'host', 'cookie']);
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 const MESSAGE_MAX = 500;
+export const DEFAULT_TIMEOUT_MS = 30_000;
+
+/**
+ * Codes recognised at the start of a plain-text tool error ("STALE_VERSION: ...").
+ * L1's OpErrorCode union plus UNAUTHORIZED.
+ */
+const TEXT_ERROR_CODES = [
+  'INVALID_OP',
+  'INVALID_CONTEXT',
+  'NOT_FOUND',
+  'DUPLICATE_ID',
+  'STALE_VERSION',
+  'CANON_FORBIDDEN',
+  'CANON_LOCKED',
+  'INVALID_REFERENCE',
+  'UNAUTHORIZED',
+] as const satisfies readonly (OpErrorCode | 'UNAUTHORIZED')[];
+// Fails to compile if L1 adds an op error code that is missing above.
+const allOpErrorCodesListed: Exclude<OpErrorCode, (typeof TEXT_ERROR_CODES)[number]> extends never ? true : never = true;
+void allOpErrorCodesListed;
+const TEXT_ERROR_CODE_SET = new Set<string>(TEXT_ERROR_CODES);
 
 export type EnvSource = Readonly<Record<string, string | undefined>>;
 export type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
@@ -44,9 +68,11 @@ export interface HttpMcpTransportOptions {
   /** Defaults to globalThis.fetch. */
   fetch?: FetchLike;
   clientInfo?: { name: string; version: string };
+  /** Per-request timeout in milliseconds, covering the response body too. Default 30000. */
+  timeoutMs?: number;
 }
 
-const OPTION_KEYS = new Set(['url', 'auth', 'env', 'fetch', 'clientInfo']);
+const OPTION_KEYS = new Set(['url', 'auth', 'env', 'fetch', 'clientInfo', 'timeoutMs']);
 const AUTH_KEYS = new Set(['tokenEnvVar', 'headerEnvVars']);
 
 interface JsonRpcResponse {
@@ -70,11 +96,13 @@ export class HttpMcpTransport implements WorldTransport {
   private readonly url: string;
   private readonly tokenEnvVar: string;
   private readonly headerEnvVars: ReadonlyArray<readonly [header: string, envVar: string]>;
-  private readonly env: EnvSource | undefined;
-  private readonly fetchImpl: FetchLike | undefined;
+  // True private fields: JSON.stringify and util.inspect cannot reach them.
+  readonly #env: EnvSource | undefined;
+  readonly #fetch: FetchLike | undefined;
+  #sessionId: string | undefined;
   private readonly clientInfo: { name: string; version: string };
+  private readonly timeoutMs: number;
   private nextId = 1;
-  private sessionId: string | undefined;
   private protocolVersion: string | undefined;
   private initializing: Promise<void> | undefined;
   private ready = false;
@@ -108,12 +136,25 @@ export class HttpMcpTransport implements WorldTransport {
       return [header, checkEnvVarName(envVar, `auth.headerEnvVars["${header}"]`)] as const;
     });
 
-    this.env = options.env;
-    this.fetchImpl = options.fetch;
+    this.#env = options.env;
+    this.#fetch = options.fetch;
     this.clientInfo = options.clientInfo ?? { name: '@starlight-agent-canvas/world-agents', version: '0.1.0' };
+    const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
+      throw new WorldClientConfigError('HttpMcpTransport timeoutMs must be a positive integer number of milliseconds.');
+    }
+    this.timeoutMs = timeoutMs;
   }
 
-  async callTool(name: string, args: Record<string, unknown>): Promise<unknown> {
+  /** Only non-secret facts. */
+  toJSON(): { url: string; tokenEnvVar: string; headerNames: string[] } {
+    return { url: this.url, tokenEnvVar: this.tokenEnvVar, headerNames: this.headerEnvVars.map(([header]) => header) };
+  }
+
+  async callTool(name: WorldToolName, args: Record<string, unknown>): Promise<unknown> {
+    if (!(WORLD_TOOL_NAMES as readonly string[]).includes(name)) {
+      throw new WorldClientConfigError(`HttpMcpTransport only calls the world tools (${WORLD_TOOL_NAMES.join(', ')}); "${safeKey(String(name))}" is not one of them.`);
+    }
     const send = () => this.request('tools/call', { name, arguments: args });
     let reply: RpcReply;
     try {
@@ -145,7 +186,7 @@ export class HttpMcpTransport implements WorldTransport {
 
   private async initialize(): Promise<void> {
     this.ready = false;
-    this.sessionId = undefined;
+    this.#sessionId = undefined;
     this.protocolVersion = undefined;
     const { message, redact } = await this.request('initialize', {
       protocolVersion: MCP_PROTOCOL_VERSION,
@@ -166,7 +207,7 @@ export class HttpMcpTransport implements WorldTransport {
   }
 
   private async notify(method: string): Promise<void> {
-    const { response } = await this.post({ jsonrpc: '2.0', method });
+    const { response } = await this.post({ jsonrpc: '2.0', method }, AbortSignal.timeout(this.timeoutMs));
     if (!response.ok) {
       throw new WorldTransportError(`MCP ${method} was rejected with HTTP ${response.status}.`, response.status);
     }
@@ -175,51 +216,72 @@ export class HttpMcpTransport implements WorldTransport {
 
   private async request(method: string, params: unknown): Promise<RpcReply> {
     const id = this.nextId++;
-    const sentSession = this.sessionId;
-    const { response, secrets } = await this.post({ jsonrpc: '2.0', id, method, params });
+    const sentSession = this.#sessionId;
+    const signal = AbortSignal.timeout(this.timeoutMs);
+    const { response, secrets } = await this.post({ jsonrpc: '2.0', id, method, params }, signal);
     const redact = makeRedactor(secrets.values);
 
     if (response.status === 404 && sentSession !== undefined) {
-      await response.body?.cancel();
-      if (this.sessionId === sentSession) {
+      await response.body?.cancel().catch(() => undefined);
+      if (this.#sessionId === sentSession) {
         this.ready = false;
-        this.sessionId = undefined;
+        this.#sessionId = undefined;
         this.protocolVersion = undefined;
       }
       throw new SessionExpired();
     }
-    if (!response.ok) {
-      const detail = redact(truncate(await response.text().catch(() => '')));
-      throw new WorldTransportError(`MCP ${method} failed with HTTP ${response.status}${detail ? `: ${detail}` : '.'}`, response.status);
+    try {
+      if (!response.ok) {
+        const detail = redact(truncate(await untilAborted(response.text(), signal)));
+        throw new WorldTransportError(`MCP ${method} failed with HTTP ${response.status}${detail ? `: ${detail}` : '.'}`, response.status);
+      }
+      if (method === 'initialize') {
+        const session = response.headers.get('mcp-session-id');
+        if (session) this.#sessionId = session;
+      }
+      return { message: await readJsonRpcResponse(response, id, method, redact, signal), redact };
+    } catch (error) {
+      if (error instanceof WorldClientError) throw error;
+      if (signal.aborted) throw this.timeoutError(method);
+      throw new WorldTransportError(`Reading the MCP ${method} response failed (${redact(truncate(describe(error)))}).`, response.status);
     }
-    if (method === 'initialize') {
-      const session = response.headers.get('mcp-session-id');
-      if (session) this.sessionId = session;
-    }
-    return { message: await readJsonRpcResponse(response, id, method, redact), redact };
   }
 
-  private async post(message: Record<string, unknown>): Promise<{ response: Response; secrets: RequestSecrets }> {
+  private timeoutError(method: string): WorldTransportError {
+    return new WorldTransportError(`MCP ${method} timed out after ${this.timeoutMs} ms.`);
+  }
+
+  private async post(message: Record<string, unknown>, signal: AbortSignal): Promise<{ response: Response; secrets: RequestSecrets }> {
     const secrets = this.readSecrets();
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       Accept: 'application/json, text/event-stream',
       ...secrets.headers,
     };
-    if (this.sessionId !== undefined) headers['Mcp-Session-Id'] = this.sessionId;
+    if (this.#sessionId !== undefined) headers['Mcp-Session-Id'] = this.#sessionId;
     if (this.protocolVersion !== undefined) headers['MCP-Protocol-Version'] = this.protocolVersion;
 
     let response: Response;
     try {
-      const init: RequestInit = { method: 'POST', headers, body: JSON.stringify(message) };
-      response = this.fetchImpl ? await this.fetchImpl(this.url, init) : await globalThis.fetch(this.url, init);
+      // Never follow redirects: fetch would forward the secret headers to the new location.
+      const init: RequestInit = { method: 'POST', headers, body: JSON.stringify(message), redirect: 'manual', signal };
+      const fetchImpl = this.#fetch;
+      response = await untilAborted(fetchImpl ? fetchImpl(this.url, init) : globalThis.fetch(this.url, init), signal);
     } catch (error) {
+      if (signal.aborted) throw this.timeoutError(String(message.method));
       // Do not keep the original error as a cause: it is not ours to vouch for.
-      const reason = error instanceof Error ? `${error.name}: ${error.message}` : 'unknown error';
-      throw new WorldTransportError(`Request to the MCP server failed (${makeRedactor(secrets.values)(truncate(reason))}).`);
+      throw new WorldTransportError(`Request to the MCP server failed (${makeRedactor(secrets.values)(truncate(describe(error)))}).`);
+    }
+    if (response.type === 'opaqueredirect' || response.status === 0 || (response.status >= 300 && response.status < 400)) {
+      await response.body?.cancel().catch(() => undefined);
+      // The Location value is not shown: it may carry anything.
+      throw new WorldTransportError(
+        `The MCP server answered with a redirect or an opaque response (HTTP ${response.status}). Redirects are not followed; configure the final URL.`,
+        response.status,
+      );
     }
     if (response.status === 401 || response.status === 403) {
-      await response.body?.cancel();
+      await response.body?.cancel().catch(() => undefined);
       throw new WorldAuthError(
         `The MCP server rejected the credentials (HTTP ${response.status}). Check the token in ${this.tokenEnvVar}`
           + `${this.headerEnvVars.length ? ` and the values of ${this.headerEnvVars.map(([, envVar]) => envVar).join(', ')}` : ''}.`,
@@ -231,7 +293,7 @@ export class HttpMcpTransport implements WorldTransport {
 
   /** Reads every secret for one request. Throws before any network call when one is missing. */
   private readSecrets(): RequestSecrets {
-    const env = this.env ?? defaultEnv();
+    const env = this.#env ?? defaultEnv();
     if (!env) {
       throw new WorldClientConfigError(`No environment to read ${this.tokenEnvVar} from. Pass the env option (for example the Worker env binding).`);
     }
@@ -256,6 +318,29 @@ export class HttpMcpTransport implements WorldTransport {
 
 class SessionExpired extends Error {}
 
+/** Settles like `promise`, or rejects as soon as `signal` aborts (even if `promise` ignores the signal). */
+function untilAborted<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
+function describe(error: unknown): string {
+  return error instanceof Error ? `${error.name}: ${error.message}` : 'unknown error';
+}
+
 function defaultEnv(): EnvSource | undefined {
   return (globalThis as { process?: { env?: EnvSource } }).process?.env;
 }
@@ -279,6 +364,9 @@ function checkUrl(url: unknown): string {
   }
   if (parsed.username || parsed.password) {
     throw new WorldClientConfigError('HttpMcpTransport url must not contain credentials. Use auth.tokenEnvVar.');
+  }
+  if (parsed.search || parsed.hash || /[?#]/.test(String(url))) {
+    throw new WorldClientConfigError('HttpMcpTransport url must not have a query string or fragment. Use auth.tokenEnvVar for secrets.');
   }
   const local = LOCAL_HOSTS.has(parsed.hostname);
   if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && local)) {
@@ -305,21 +393,23 @@ async function readJsonRpcResponse(
   id: number,
   method: string,
   redact: (text: string) => string,
+  signal: AbortSignal,
 ): Promise<JsonRpcResponse> {
   const contentType = (response.headers.get('content-type') ?? '').toLowerCase();
   let found: JsonRpcResponse | undefined;
   if (contentType.includes('text/event-stream')) {
-    found = await readSseResponse(response, id);
+    found = await readSseResponse(response, id, signal);
   } else if (contentType.includes('application/json')) {
+    const text = await untilAborted(response.text(), signal);
     let body: unknown;
     try {
-      body = await response.json();
+      body = JSON.parse(text);
     } catch {
       throw new WorldTransportError(`MCP ${method} returned invalid JSON.`, response.status);
     }
     found = (Array.isArray(body) ? body : [body]).find((message) => isResponseFor(message, id));
   } else {
-    await response.body?.cancel();
+    await response.body?.cancel().catch(() => undefined);
     throw new WorldTransportError(`MCP ${method} returned unsupported content type "${redact(truncate(contentType))}".`, response.status);
   }
   if (!found) throw new WorldTransportError(`MCP ${method} returned no JSON-RPC response for request ${id}.`, response.status);
@@ -333,14 +423,14 @@ function isResponseFor(message: unknown, id: number): message is JsonRpcResponse
 }
 
 /** Reads SSE events until one carries the JSON-RPC response for `id`, then stops reading. */
-async function readSseResponse(response: Response, id: number): Promise<JsonRpcResponse | undefined> {
+async function readSseResponse(response: Response, id: number, signal: AbortSignal): Promise<JsonRpcResponse | undefined> {
   const parser = new SseResponseFinder(id);
-  if (!response.body) return parser.push(await response.text(), true);
+  if (!response.body) return parser.push(await untilAborted(response.text(), signal), true);
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   try {
     for (;;) {
-      const { done, value } = await reader.read();
+      const { done, value } = await untilAborted(reader.read(), signal);
       const found = parser.push(done ? decoder.decode() : decoder.decode(value, { stream: true }), done);
       if (found || done) return found;
     }
@@ -431,13 +521,20 @@ function readToolResult(tool: string, response: JsonRpcResponse, redact: (text: 
     const record = parsed && payload && typeof payload === 'object' ? payload as Record<string, unknown> : undefined;
     const nested = record?.error && typeof record.error === 'object' ? record.error as Record<string, unknown> : record;
     const detail = nested ? toolErrorDetail(nested, redact) : undefined;
-    throw new WorldToolError(tool, detail ?? {
-      code: 'TOOL_ERROR',
-      message: redact(truncate(firstText?.text ?? 'tool reported an error without details')),
-    });
+    throw new WorldToolError(tool, detail ?? textErrorDetail(firstText?.text, redact));
   }
   if (!parsed) throw new WorldTransportError(`${tool} returned neither structuredContent nor JSON text content.`);
   return payload;
+}
+
+/** Plain-text tool error. "STALE_VERSION: node n_x is at 4" keeps its code when it is a known one. */
+function textErrorDetail(text: string | undefined, redact: (text: string) => string): WorldToolErrorDetail {
+  if (text === undefined) return { code: 'TOOL_ERROR', message: 'tool reported an error without details' };
+  const match = /^([A-Z_]+):\s*([\s\S]*)$/.exec(text);
+  if (match && TEXT_ERROR_CODE_SET.has(match[1]!)) {
+    return { code: match[1]!, message: redact(truncate(match[2]!.trim() || match[1]!)) };
+  }
+  return { code: 'TOOL_ERROR', message: redact(truncate(text)) };
 }
 
 function toolErrorDetail(source: Record<string, unknown>, redact: (text: string) => string): WorldToolErrorDetail | undefined {

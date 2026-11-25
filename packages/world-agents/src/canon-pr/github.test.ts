@@ -9,7 +9,7 @@ import {
   planCanonPr,
   utf8ToBase64,
 } from './github.js';
-import type { CanonFetchInit } from './guard.js';
+import type { CanonFetchInit, ResponseLike } from './guard.js';
 import { buildCanonProposal } from './proposal.js';
 
 const TOKEN = 'fake-test-token-0123456789abcdef';
@@ -51,8 +51,16 @@ const proposal = buildCanonProposal(
 );
 
 type Step = 'get-repo' | 'get-base-ref' | 'create-branch' | 'check-file' | 'put-file' | 'open-pr';
-interface Reply { status: number; json?: unknown }
-interface Recorded { url: string; method: string; headers: Record<string, string>; body: Record<string, unknown> | null; step: Step }
+type Reply = { status: number; json?: unknown } | ((init: CanonFetchInit) => Promise<ResponseLike>);
+interface Recorded {
+  url: string;
+  method: string;
+  headers: Record<string, string>;
+  body: Record<string, unknown> | null;
+  step: Step;
+  redirect?: string;
+  signal?: AbortSignal;
+}
 
 function stepOf(method: string, path: string): Step {
   if (method === 'GET' && /^\/repos\/[^/]+\/[^/]+$/.test(path)) return 'get-repo';
@@ -73,14 +81,22 @@ const defaults: Record<Step, Reply> = {
   'open-pr': { status: 201, json: { number: 42, html_url: 'https://github.com/Arcanea-Labs/arcanea-ai-app/pull/42' } },
 };
 
-function github(overrides: Partial<Record<Step, Reply>> = {}, apiBase = 'https://api.github.com') {
+function github(overrides: Partial<Record<Step, Reply>> = {}) {
   const calls: Recorded[] = [];
-  const fetch = async (url: string, init: CanonFetchInit) => {
-    const path = new URL(url).pathname.slice(new URL(apiBase).pathname.replace(/\/$/, '').length);
-    const step = stepOf(init.method, path);
-    calls.push({ url, method: init.method, headers: init.headers, body: init.body ? JSON.parse(init.body) : null, step });
+  const fetch = async (url: string, init: CanonFetchInit): Promise<ResponseLike> => {
+    const step = stepOf(init.method, new URL(url).pathname);
+    calls.push({
+      url,
+      method: init.method,
+      headers: init.headers,
+      body: init.body ? JSON.parse(init.body) : null,
+      step,
+      redirect: init.redirect,
+      signal: init.signal,
+    });
     const reply = overrides[step] ?? defaults[step];
-    return new Response(reply.json === undefined ? '' : JSON.stringify(reply.json), { status: reply.status });
+    if (typeof reply === 'function') return reply(init);
+    return new Response(reply.json === undefined ? null : JSON.stringify(reply.json), { status: reply.status });
   };
   return { fetch, calls };
 }
@@ -148,6 +164,8 @@ describe('planCanonPr', () => {
       { owner: 'o', repo: '..' },
       { owner: 'o', repo: 'r', base: '../main' },
       { owner: 'o', repo: 'r', base: 'main?x=1' },
+      { owner: 'o', repo: 'r', base: 'canon/other' },
+      { owner: 'o', repo: 'r', base: 'canon/the-glass-orchard' },
     ]) {
       let code: string | undefined;
       try {
@@ -213,11 +231,135 @@ describe('openCanonPr', () => {
     expect(result.prNumber).toBe(42);
   });
 
-  it('works against a custom API base URL', async () => {
-    const apiBaseUrl = 'https://ghe.example.com/api/v3';
-    const gh = github({}, apiBaseUrl);
-    await openCanonPr(proposal, { ...target, base: 'main', getToken: () => TOKEN, fetch: gh.fetch, apiBaseUrl: `${apiBaseUrl}/` });
-    expect(gh.calls[0]!.url).toBe('https://ghe.example.com/api/v3/repos/Arcanea-Labs/arcanea-ai-app/git/ref/heads/main');
+  it('accepts https://api.github.com with or without a trailing slash', async () => {
+    for (const apiBaseUrl of ['https://api.github.com', 'https://api.github.com/']) {
+      const gh = github();
+      await openCanonPr(proposal, { ...target, base: 'main', getToken: () => TOKEN, fetch: gh.fetch, apiBaseUrl });
+      expect(gh.calls[0]!.url).toBe('https://api.github.com/repos/Arcanea-Labs/arcanea-ai-app/git/ref/heads/main');
+    }
+  });
+
+  it.each([
+    ['https://ghe.example.com/api/v3'],
+    ['https://evil.example'],
+    ['http://api.github.com'],
+    ['https://api.github.com:8443'],
+    ['https://user:pass@api.github.com'],
+    ['https://api.github.com/api/v3'],
+    ['https://api.github.com.evil.example'],
+    ['https://API.GITHUB.COM'],
+    [''],
+  ])('refuses apiBaseUrl %j before the token or any request', async (apiBaseUrl) => {
+    const gh = github();
+    const tokens = tokenSource();
+    expect(await caught(openCanonPr(proposal, { ...target, getToken: tokens.getToken, fetch: gh.fetch, apiBaseUrl })))
+      .toMatchObject({ code: 'INVALID_OPTIONS', step: 'setup' });
+    expect(tokens.count).toBe(0);
+    expect(gh.calls).toHaveLength(0);
+  });
+
+  it('refuses a canon/ base, given or returned as the default branch', async () => {
+    const gh = github();
+    expect(await caught(openCanonPr(proposal, { ...target, base: 'canon/other', getToken: () => TOKEN, fetch: gh.fetch })))
+      .toMatchObject({ code: 'INVALID_OPTIONS' });
+    expect(gh.calls).toHaveLength(0);
+    const stacked = github({ 'get-repo': { status: 200, json: { default_branch: 'canon/other' } } });
+    expect(await caught(openCanonPr(proposal, { ...target, getToken: () => TOKEN, fetch: stacked.fetch })))
+      .toMatchObject({ code: 'INVALID_RESPONSE', step: 'get-repo' });
+    expect(stacked.calls.map((c) => c.step)).toEqual(['get-repo']);
+  });
+
+  it('sends every request with redirect manual and a timeout signal', async () => {
+    const gh = github();
+    await openCanonPr(proposal, { ...target, getToken: () => TOKEN, fetch: gh.fetch });
+    expect(gh.calls).toHaveLength(6);
+    for (const call of gh.calls) {
+      expect(call.redirect).toBe('manual');
+      expect(call.signal).toBeInstanceOf(AbortSignal);
+    }
+  });
+
+  it.each([
+    ['get-repo', 301, false],
+    ['get-base-ref', 302, false],
+    ['check-file', 307, true],
+    ['put-file', 308, true],
+    ['open-pr', 303, true],
+  ] as const)('treats a %s redirect (%i) as an error and does not follow it', async (step, status, afterBranch) => {
+    const gh = github({ [step]: { status, json: { message: 'Moved Permanently', url: 'https://evil.example/x' } } });
+    const error = await caught(openCanonPr(proposal, { ...target, getToken: () => TOKEN, fetch: gh.fetch }));
+    expect(error).toMatchObject({ code: 'REDIRECT', step, status });
+    expect(gh.calls.at(-1)!.step).toBe(step);
+    expect(gh.calls.some((c) => c.url.includes('evil'))).toBe(false);
+    expect(error.branch).toBe(afterBranch ? 'canon/the-glass-orchard' : undefined);
+  });
+
+  it('treats an opaque redirect (status 0) as an error', async () => {
+    const opaque = async (): Promise<ResponseLike> => ({ status: 0, type: 'opaqueredirect', text: async () => '' });
+    const gh = github({ 'get-repo': opaque });
+    expect(await caught(openCanonPr(proposal, { ...target, getToken: () => TOKEN, fetch: gh.fetch })))
+      .toMatchObject({ code: 'REDIRECT', step: 'get-repo', status: 0 });
+    expect(gh.calls).toHaveLength(1);
+  });
+
+  it('times out a request that never answers', async () => {
+    const hang = (init: CanonFetchInit) => new Promise<ResponseLike>((_resolve, reject) => {
+      init.signal!.addEventListener('abort', () => reject(init.signal!.reason));
+    });
+    const gh = github({ 'put-file': hang });
+    const error = await caught(openCanonPr(proposal, { ...target, getToken: () => TOKEN, fetch: gh.fetch, timeoutMs: 25 }));
+    expect(error).toMatchObject({ code: 'TIMEOUT', step: 'put-file', branch: 'canon/the-glass-orchard' });
+    expect(error.message).toContain('25 ms');
+  });
+
+  it.each([[0], [-1], [Number.NaN], [Number.POSITIVE_INFINITY]])('refuses timeoutMs %s', async (timeoutMs) => {
+    const gh = github();
+    expect(await caught(openCanonPr(proposal, { ...target, getToken: () => TOKEN, fetch: gh.fetch, timeoutMs })))
+      .toMatchObject({ code: 'INVALID_OPTIONS' });
+    expect(gh.calls).toHaveLength(0);
+  });
+
+  it.each([
+    ['check-file', { status: 200, json: { sha: 'b'.repeat(40) } }, 'FILE_EXISTS', ['get-repo', 'get-base-ref', 'create-branch', 'check-file']],
+    ['put-file', { status: 409, json: { message: 'Conflict' } }, 'HTTP_ERROR', ['get-repo', 'get-base-ref', 'create-branch', 'check-file', 'put-file']],
+    ['open-pr', { status: 422, json: { message: 'Validation Failed' } }, 'HTTP_ERROR', ['get-repo', 'get-base-ref', 'create-branch', 'check-file', 'put-file', 'open-pr']],
+  ] as const)('reports the leftover branch when %s fails after the branch was created', async (step, reply, code, steps) => {
+    const gh = github({ [step]: reply });
+    const error = await caught(openCanonPr(proposal, { ...target, getToken: () => TOKEN, fetch: gh.fetch }));
+    expect(error).toMatchObject({ code, step, branch: 'canon/the-glass-orchard', path: proposal.path });
+    expect(error.calls!.map((c) => c.step)).toEqual(steps);
+    expect(error.message).toContain('Branch canon/the-glass-orchard was left in place');
+    expect(error.message).toContain('retry with a different slug');
+    expect(gh.calls.some((c) => c.method === 'DELETE')).toBe(false);
+  });
+
+  it('does not report a branch when failing before it was created', async () => {
+    const gh = github({ 'get-base-ref': { status: 404, json: { message: 'Not Found' } } });
+    const error = await caught(openCanonPr(proposal, { ...target, getToken: () => TOKEN, fetch: gh.fetch }));
+    expect(error.branch).toBeUndefined();
+    expect(error.calls).toBeUndefined();
+  });
+
+  it('accepts the PR URL with GitHub canonical casing', async () => {
+    const gh = github({ 'open-pr': { status: 201, json: { number: 42, html_url: 'https://github.com/arcanea-labs/Arcanea-AI-App/pull/42' } } });
+    const result = await openCanonPr(proposal, { ...target, getToken: () => TOKEN, fetch: gh.fetch });
+    expect(result.prUrl).toBe('https://github.com/arcanea-labs/Arcanea-AI-App/pull/42');
+  });
+
+  it.each([
+    [{ number: 42, html_url: 'https://evil.example/Arcanea-Labs/arcanea-ai-app/pull/42' }],
+    [{ number: 42, html_url: 'http://github.com/Arcanea-Labs/arcanea-ai-app/pull/42' }],
+    [{ number: 42, html_url: 'https://github.com/Arcanea-Labs/other-repo/pull/42' }],
+    [{ number: 42, html_url: 'https://github.com/Arcanea-Labs/arcanea-ai-app/pull/43' }],
+    [{ number: 42, html_url: 'https://github.com/Arcanea-Labs/arcanea-ai-app/pull/42?x=1' }],
+    [{ number: 42, html_url: 'https://github.com/Arcanea-Labs/arcanea-ai-app/issues/42' }],
+    [{ number: 42 }],
+    [{ number: 0, html_url: 'https://github.com/Arcanea-Labs/arcanea-ai-app/pull/0' }],
+    [{ number: '42', html_url: 'https://github.com/Arcanea-Labs/arcanea-ai-app/pull/42' }],
+  ])('rejects an unexpected PR response %j', async (json) => {
+    const gh = github({ 'open-pr': { status: 201, json } });
+    expect(await caught(openCanonPr(proposal, { ...target, getToken: () => TOKEN, fetch: gh.fetch })))
+      .toMatchObject({ code: 'INVALID_RESPONSE', step: 'open-pr', branch: 'canon/the-glass-orchard' });
   });
 
   it('stops with BRANCH_EXISTS on 422 and never reuses the branch', async () => {

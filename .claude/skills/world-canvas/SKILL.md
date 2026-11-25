@@ -7,11 +7,11 @@ description: Operate a Starlight World Canvas world (for example Arcanea) throug
 
 A world is one large graph of typed nodes and edges on a 2D canvas. People and agents (Claude, Codex, ChatGPT) edit the same graph through one remote MCP server. Canon stays in git; the canvas holds drafts and proposals.
 
-Contract: `docs/world-canvas/spec.md` and the zod schemas in `packages/world/src/schemas.ts` and `ops.ts`. If this skill and the code disagree, the code wins. Connection setup per client: `docs/world-canvas/connect-agents.md`. Typed client for scripts: `@starlight-agent-canvas/world-agents`.
+Contract: `docs/world-canvas/spec.md` and the zod schemas in `packages/world/src/schemas.ts` and `ops.ts`. If this skill and the code disagree, the code wins. Exact tool arguments, outputs and error shapes: `docs/world-canvas/tool-contract.md`. Connection setup per client: `docs/world-canvas/connect-agents.md`. Typed client for scripts: `@starlight-agent-canvas/world-agents`.
 
 ## Before you write
 
-1. Call `get_world` once. Note `world.version`, the regions, and the counts by kind.
+1. Every tool call takes `worldId` (for Arcanea, `arcanea`; ask the user if you do not know it). Call `get_world` once. Note `world.version`, the regions, and the counts by kind.
 2. Find what already exists with `search` (by title or text, filter by `kinds`). Do not create a node that duplicates an existing title in the same region; update or link the existing one.
 3. For anything about Arcanea lore, read `.arcanea/lore/CANON_LOCKED.md` in the arcanea-ai-app repo first. Never contradict a LOCKED truth in a node you write.
 
@@ -19,14 +19,14 @@ Contract: `docs/world-canvas/spec.md` and the zod schemas in `packages/world/src
 
 | Tool | Use it to | Notes |
 | --- | --- | --- |
-| `get_world` | Read title, version, regions, counts | Read only |
-| `get_region` | Read nodes and edges in a region or bounds | Pass `regionId` or `bounds`, plus `level` |
-| `search` | Find nodes by text | Returns id, kind, title, summary, position, regionId |
-| `add_node` | Create a node | Omit `id` and the server makes one; set `regionId` and `position` |
-| `update_node` | Change fields of a node | Needs `baseVersion`; no `canon`, no `position` (use `move`) |
+| `get_world` | Read title, version, regions, counts | `{worldId}`; read only |
+| `get_region` | Read nodes and edges in a region or bounds | Exactly one of `regionId` or `bounds`; `level` optional; nodes carry `version` |
+| `search` | Find nodes by text | `query`, optional `kinds` and `limit`; returns id, kind, title, summary, position, regionId, but no `version` |
+| `add_node` | Create a node | `{worldId, node: {kind, title, position, regionId?, ...}}`; omit `node.id` and the server makes one |
+| `update_node` | Change fields of a node | `{worldId, id, baseVersion, patch}`; no `canon`, no `position` (use `move`) |
 | `link` | Add an edge | `from relation to` reads as a sentence; same link twice is `DUPLICATE_ID` |
-| `move` | Change positions or region | Needs `baseVersion` per node; up to 5000 moves |
-| `propose_canon` | Ask for a node or edge to become canon | Needs `baseVersion` and a `note`; opens a draft PR |
+| `move` | Change positions or region | `moves: [{id, baseVersion, position, regionId?}]`, up to 5000 |
+| `propose_canon` | Ask for a node or edge to become canon | `{worldId, target: {type, id}, baseVersion, note}`; opens a draft PR |
 | `layout_region` | Arrange a region (`grid`, `layered`, `force`) | Moves only; layout is never canon |
 | `import_whiteboard` | Import a claude.ai whiteboard export | Everything imported is `draft`, harness `importer` |
 
@@ -44,15 +44,16 @@ Limits: title 1 to 300 chars, summary up to 2000, body (markdown) up to 200000, 
 
 - Every node and edge has `version`, starting at 1 and going up by 1 on each accepted change. The world has `world.version`, which goes up by 1 on each accepted batch. Every tool response includes the new world version.
 - Writes to existing entities carry `baseVersion`: the version you last read. If someone changed it since, the call fails with `STALE_VERSION` and gives `expectedVersion` and `actualVersion`.
-- On `STALE_VERSION`: re-read that node (`get_region` or `search`), merge your change into the current content, and retry once with the new `baseVersion`. Do not blindly overwrite another agent's edit. If it fails again, stop and tell the user.
+- Where `baseVersion` comes from: the `version` field of a node returned by `get_region` (at `card` or `full` level; `cluster` returns counts, not nodes) or by the response of your own `add_node`, `update_node` or `move`. `search` results carry no version.
+- On `STALE_VERSION`: re-read that node with `get_region` (its region, or a small `bounds` box around its position, at `full` level), merge your change into the current content, and retry once with the new `baseVersion`. Do not blindly overwrite another agent's edit. If it fails again, stop and tell the user.
 - A batch is atomic: all of it applies or none of it does.
 - The document format is `starlight.worldGraph.v1`. Do not invent fields; unknown keys in a write are rejected, not ignored.
 
 ## The canon gate
 
-- `canon.status` is `draft`, `proposed` or `canon`. You can create `draft` (default) or `proposed`. You can never produce `canon`; any attempt fails with `CANON_FORBIDDEN`.
-- Canon nodes and edges cannot be updated (`CANON_LOCKED`). They may be moved, because layout is not canon.
-- To ask for canon, call `propose_canon` with a clear `note` (why this belongs in canon, what it touches). L2 turns it into a draft PR against arcanea-ai-app that adds one file under `.arcanea/lore/proposals/`. It never edits `CANON_LOCKED.md` or any existing lore file. Only the Creator (Frank) approves canon, and promotion happens through `/lock-decision`.
+- `canon.status` is `draft`, `proposed` or `canon`. You can create `draft` (default) or `proposed`. You can never produce `canon`: the typed client rejects it locally, and the server rejects it with `CANON_FORBIDDEN`.
+- Canon nodes and edges cannot be updated or proposed again (`CANON_LOCKED`). Changing canon needs a change to the canon files in git, approved by the Creator, not an op. Canon nodes may be moved, because layout is not canon.
+- To ask for canon, call `propose_canon` with a clear `note` (why this belongs in canon, what it touches). L2 turns it into a draft PR against arcanea-ai-app that adds one file under `.arcanea/lore/proposals/`. It never edits `CANON_LOCKED.md` or any existing lore file. Only the Creator (Frank) approves canon; arcanea-ai-app's AGENTS.md says promotion happens only through `/lock-decision`.
 - Editing a `proposed` node sets it back to `draft`, because the open PR no longer matches. Finish edits before you propose.
 - Never describe a draft or proposed node to the user as canon.
 
