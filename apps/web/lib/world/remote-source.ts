@@ -115,7 +115,21 @@ export class RemoteWorldSource implements WorldSource {
     try {
       const out = await this.call<OpOutcome>('apply_ops', { ops });
       this.push({ ...entry, status: out.ok ? 'confirmed' : 'rejected', error: out.ok ? undefined : out.error.message });
-      if (!out.ok) this.emit({ type: 'rollback', error: out.error });
+      if (!out.ok) {
+        this.emit({ type: 'rollback', error: out.error });
+        return out;
+      }
+      // Do not depend on the live feed: drop stale cached nodes and announce the
+      // change so the canvas refetches its tiles at the new versions.
+      for (const id of [...out.changed.nodes, ...out.changed.removedNodes]) this.nodes.delete(id);
+      this.emit({
+        type: 'changed',
+        version: out.version,
+        nodeIds: out.changed.nodes,
+        edgeIds: out.changed.edges,
+        removedNodeIds: out.changed.removedNodes,
+        removedEdgeIds: out.changed.removedEdges,
+      });
       return out;
     } catch (err) {
       const error: OpError = (err as { detail?: OpError }).detail ?? { code: 'INVALID_OP', message: err instanceof Error ? err.message : String(err) };

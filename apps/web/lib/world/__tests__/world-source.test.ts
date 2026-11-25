@@ -171,3 +171,22 @@ describe('describeOps and tints', () => {
     expect(regionTint(undefined, 3)).toMatch(/^#[0-9a-f]{6}$/);
   });
 });
+
+describe('RemoteWorldSource', () => {
+  it('announces a change after a confirmed batch without waiting for the live feed', async () => {
+    const { RemoteWorldSource } = await import('../remote-source');
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
+      ok: true,
+      version: 4,
+      changed: { nodes: ['n1'], edges: [], removedNodes: [], removedEdges: [] },
+      proposals: [],
+    }), { status: 200 }));
+    const source = new RemoteWorldSource('https://worker.example', 'demo', fetchImpl as unknown as typeof fetch);
+    const events: { type: string; version?: number }[] = [];
+    source.subscribe((e) => events.push(e as { type: string; version?: number }));
+    const out = await source.applyOps([{ op: 'updateNode', id: 'n1', baseVersion: 3, patch: { title: 'x' } }]);
+    expect(out.ok).toBe(true);
+    expect(events.find((e) => e.type === 'changed')?.version).toBe(4);
+    expect(source.activity()[0].status).toBe('confirmed');
+  });
+});
