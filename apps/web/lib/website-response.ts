@@ -1,10 +1,9 @@
 import { NextResponse } from 'next/server';
+import { originDenied } from './request-origin';
 import { checkpointErrorResponse } from './checkpoint-response';
 
 export function websiteOriginDenied(request: Request): NextResponse | null {
-  const origin = request.headers.get('origin');
-  const expected = `${new URL(request.url).protocol}//${request.headers.get('host')?.toLowerCase()}`;
-  if (request.headers.get('sec-fetch-site') === 'cross-site' || (origin && origin !== expected)) return NextResponse.json({ error: 'Website plan changes require the workspace origin.' }, { status: 403 });
+  if (originDenied(request)) return NextResponse.json({ error: 'Website plan changes require the workspace origin.' }, { status: 403 });
   return null;
 }
 
