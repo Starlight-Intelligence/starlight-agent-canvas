@@ -1,5 +1,6 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
+import { randomBytes } from 'node:crypto';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { basename, dirname, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { importClaudeWhiteboard, type ImportLexicon } from '../import/claude-whiteboard.js';
 import { findPathOverlaps } from './paths.js';
@@ -99,9 +100,20 @@ function parse(argv: string[]) {
   });
 }
 
+/**
+ * Writes via a temp file in the same directory, then renames over `path`.
+ * The temp name has a random suffix and is opened with 'wx' (O_CREAT|O_EXCL),
+ * so a file or symlink planted at a guessable path is never written through.
+ */
 async function writeAtomic(path: string, content: string): Promise<void> {
-  await mkdir(dirname(path), { recursive: true });
-  const temp = `${path}.${process.pid}.tmp`;
-  await writeFile(temp, content, 'utf8');
-  await rename(temp, path);
+  const dir = dirname(path);
+  await mkdir(dir, { recursive: true });
+  const temp = join(dir, `.${basename(path)}.${randomBytes(12).toString('hex')}.tmp`);
+  await writeFile(temp, content, { encoding: 'utf8', flag: 'wx', mode: 0o644 });
+  try {
+    await rename(temp, path);
+  } catch (error) {
+    await rm(temp, { force: true });
+    throw error;
+  }
 }

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { edgeIdFor, hash53, slugify, stableId } from '../ids.js';
 import {
+  isSafeLinkHref,
   LIMITS,
   nodeKindSchema,
   WORLD_GRAPH_SCHEMA_VERSION,
@@ -108,7 +109,7 @@ export interface ImportOptions {
 export type ElementDisposition =
   | { as: 'node'; nodeId: string }
   | { as: 'merged'; into: string; role: string }
-  | { as: 'expanded'; nodeIds: string[] }
+  | { as: 'expanded'; nodeIds: string[]; /** Names on the line that were not turned into nodes. */ dropped?: string[] }
   | { as: 'edge'; edgeId: string }
   | { as: 'region'; regionId: string; nodeId: string }
   | { as: 'skipped'; reason: string };
@@ -232,14 +233,26 @@ function isHex6(color: string | undefined): color is string {
   return Boolean(color && /^#[0-9a-fA-F]{6}$/.test(color));
 }
 
-function safeUrl(value: string | undefined): string | undefined {
-  if (!value) return undefined;
+type HrefCheck = { href: string; reason?: undefined } | { href?: undefined; reason?: string };
+
+/**
+ * An image href the graph will accept: http(s), normalized, and within the
+ * same limits as `mediaSchema.href` (safeLinkHrefSchema). Anything else is
+ * filtered here with a reason, so one bad link cannot abort the import.
+ */
+function checkHref(value: string | undefined): HrefCheck {
+  if (!value) return {};
+  let normalized: string;
   try {
     const url = new URL(value);
-    return url.protocol === 'http:' || url.protocol === 'https:' ? url.toString() : undefined;
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return { reason: 'a non-http href' };
+    normalized = url.toString();
   } catch {
-    return undefined;
+    return { reason: 'a non-http href' };
   }
+  if (normalized.length > 2048) return { reason: `an href of ${normalized.length} characters (limit 2048)` };
+  if (!isSafeLinkHref(normalized)) return { reason: 'an href the graph does not accept' };
+  return { href: normalized };
 }
 
 function normalizeAt(options: ImportOptions, exportedAt: string | undefined): string {
@@ -637,7 +650,7 @@ export function importClaudeWhiteboard(input: unknown, options: ImportOptions = 
 
     if (pair && names.length > 0) {
       const created: string[] = [];
-      const [godName, beastName] = names;
+      const [godName, beastName, ...extraNames] = names;
       const god = addNode({
         key: `${pair.key}#god`,
         kind: kindFor(godName, 'god'),
@@ -668,7 +681,12 @@ export function importClaudeWhiteboard(input: unknown, options: ImportOptions = 
       } else {
         warnings.push(`Gate "${gateName}" (${heading.key}) lists a god but no godbeast.`);
       }
-      disposition.set(pair.key, { as: 'expanded', nodeIds: created });
+      if (extraNames.length > 0) {
+        warnings.push(`Gate "${gateName}" (${pair.key}) line names more than a god and a godbeast; dropped: ${extraNames.map((name) => `"${name}"`).join(', ')}.`);
+        disposition.set(pair.key, { as: 'expanded', nodeIds: created, dropped: extraNames });
+      } else {
+        disposition.set(pair.key, { as: 'expanded', nodeIds: created });
+      }
     } else {
       warnings.push(`Gate "${gateName}" (${heading.key}) has no "God × Godbeast" line.`);
     }
@@ -831,8 +849,9 @@ export function importClaudeWhiteboard(input: unknown, options: ImportOptions = 
       || (depictedNode
         ? `${depictedNode.title} ${isPlaceholder ? 'placeholder' : 'plate'}`
         : role === 'cover' ? `${worldTitle} cover` : `${regionTitleOf(img) || worldTitle} image`);
-    const href = safeUrl(img.href);
-    if (img.href && !href) warnings.push(`Image ${img.key} has a non-http href; kept in meta only.`);
+    const hrefCheck = checkHref(img.href);
+    const href = hrefCheck.href;
+    if (img.href && !href) warnings.push(`Image ${img.key} has ${hrefCheck.reason ?? 'an unusable href'}; kept in meta only.`);
     const media: Media[] = [];
     let oversizedSrc: { length: number; hash53: string; prefix: string } | undefined;
     if (img.src && img.src.length > ORIGINAL_SRC_MAX) {
