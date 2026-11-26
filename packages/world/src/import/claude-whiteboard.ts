@@ -123,9 +123,27 @@ export interface ImportReport {
   edgesByRelation: Record<string, number>;
   regionsOut: number;
   dispositions: Record<ElementDisposition['as'], number>;
+  /** Images whose bytes must be re-uploaded, including ones too large to keep inline. */
   needsReupload: number;
   skipped: { elementId: string; reason: string }[];
+  /**
+   * Text that did not fit a field (title, summary, region title). The full
+   * text is kept in the node body unless `fullTextIn` is null (body itself
+   * overflowed), so nothing merged into a node is lost silently.
+   */
+  truncated: ImportTruncation[];
+  /** Ids that appear on more than one element in an array export. */
+  duplicateIds: { id: string; occurrences: number; keys: string[] }[];
   warnings: string[];
+}
+
+export interface ImportTruncation {
+  nodeId: string;
+  elementIds: string[];
+  field: 'title' | 'summary' | 'body' | 'regionTitle';
+  originalLength: number;
+  keptLength: number;
+  fullTextIn: 'body' | null;
 }
 
 export interface ImportResult {
@@ -226,14 +244,27 @@ function safeUrl(value: string | undefined): string | undefined {
   }
 }
 
-function normalizeAt(options: ImportOptions, exportedAt: string | undefined): string {
-  const candidate = options.at ?? exportedAt;
+/**
+ * Reads the import timestamp. Never depends on the machine's time zone:
+ * a date alone is midnight UTC, a date-time without an offset is read as UTC
+ * (with a warning), and anything that is not ISO 8601 is refused.
+ */
+function normalizeAt(options: ImportOptions, exportedAt: string | undefined, warnings: string[]): string {
+  const candidate = (options.at ?? exportedAt)?.trim();
   if (!candidate) throw new Error('importClaudeWhiteboard: pass options.at; the export has no exportedAt.');
-  if (/^\d{4}-\d{2}-\d{2}$/.test(candidate)) return `${candidate}T00:00:00.000Z`;
-  const parsed = z.iso.datetime().safeParse(candidate);
-  if (parsed.success) return candidate;
-  const date = new Date(candidate);
-  if (Number.isNaN(date.getTime())) throw new Error(`importClaudeWhiteboard: cannot read timestamp "${candidate}".`);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(candidate) && z.iso.date().safeParse(candidate).success) return `${candidate}T00:00:00.000Z`;
+  if (z.iso.datetime().safeParse(candidate).success) return candidate;
+  let iso: string | undefined;
+  if (z.iso.datetime({ offset: true }).safeParse(candidate).success) {
+    iso = candidate;
+  } else if (z.iso.datetime({ local: true }).safeParse(candidate).success) {
+    iso = `${candidate}Z`;
+    warnings.push(`Timestamp "${candidate}" has no UTC offset; read it as UTC.`);
+  }
+  const date = iso ? new Date(iso) : undefined;
+  if (!date || Number.isNaN(date.getTime())) {
+    throw new Error(`importClaudeWhiteboard: timestamp "${candidate}" must be ISO 8601 (YYYY-MM-DD, or a date-time with Z or an offset).`);
+  }
   return date.toISOString();
 }
 
@@ -252,9 +283,10 @@ export function importClaudeWhiteboard(input: unknown, options: ImportOptions = 
   const sourceTitle = doc.title?.trim() || 'Imported world';
   const worldTitle = options.title?.trim() || sourceTitle;
   const worldId = options.worldId ?? (slugify(worldTitle, 64) || 'world');
-  const at = normalizeAt(options, doc.exportedAt);
-  const actor: Actor = { harness: 'importer', at };
   const warnings: string[] = [];
+  const truncated: ImportTruncation[] = [];
+  const at = normalizeAt(options, doc.exportedAt, warnings);
+  const actor: Actor = { harness: 'importer', at };
 
   const lexKinds = new Map<string, NodeKind>();
   for (const [title, kind] of Object.entries(options.lexicon?.kinds ?? {})) {
@@ -265,10 +297,39 @@ export function importClaudeWhiteboard(input: unknown, options: ImportOptions = 
     lexTags.set(title.trim().toLowerCase(), tags);
   }
 
-  const elements: El[] = (Array.isArray(doc.elements)
-    ? doc.elements.map(({ id, ...rest }) => ({ ...rest, key: id }))
-    : Object.entries(doc.elements).map(([key, value]) => ({ ...value, key }))
-  ).sort((a, b) => naturalKeyCompare(a.key, b.key));
+  // An array export can repeat an id. Every element still gets its own key
+  // (and its own disposition): the first occurrence keeps the id, later ones
+  // become `id~2`, `id~3`, ... in input order. Arrows naming a repeated id
+  // resolve to the first occurrence, with a warning.
+  const duplicateIds: ImportReport['duplicateIds'] = [];
+  const repeatedIds = new Set<string>();
+  let rawElements: El[];
+  if (Array.isArray(doc.elements)) {
+    const taken = new Set(doc.elements.map((el) => el.id));
+    const seen = new Map<string, string[]>();
+    rawElements = doc.elements.map(({ id, ...rest }) => {
+      const keys = seen.get(id);
+      if (!keys) {
+        seen.set(id, [id]);
+        return { ...rest, key: id };
+      }
+      let key = `${id}~${keys.length + 1}`;
+      while (taken.has(key)) key = `${key}~`;
+      taken.add(key);
+      keys.push(key);
+      return { ...rest, key };
+    });
+    for (const [id, keys] of seen) {
+      if (keys.length < 2) continue;
+      repeatedIds.add(id);
+      duplicateIds.push({ id, occurrences: keys.length, keys });
+      warnings.push(`Element id "${id}" appears ${keys.length} times; imported them as ${keys.join(', ')}.`);
+    }
+    duplicateIds.sort((a, b) => naturalKeyCompare(a.id, b.id));
+  } else {
+    rawElements = Object.entries(doc.elements).map(([key, value]) => ({ ...value, key }));
+  }
+  const elements: El[] = rawElements.sort((a, b) => naturalKeyCompare(a.key, b.key));
   const byKey = new Map(elements.map((el) => [el.key, el]));
 
   const disposition = new Map<string, ElementDisposition>();
@@ -335,9 +396,15 @@ export function importClaudeWhiteboard(input: unknown, options: ImportOptions = 
     const maxX = Math.max(...boxes.map((b) => b.x + b.w)) + REGION_PAD;
     const maxY = Math.max(...boxes.map((b) => b.y + b.h)) + REGION_PAD;
     const id = stableId('r', `${worldId}\u0000claude-whiteboard\u0000${key}`, title);
+    const regionTitle = clip(title, LIMITS.titleMax);
+    if (regionTitle.length < title.trim().length) {
+      // The region node made from the same header keeps the full title in its body.
+      truncated.push({ nodeId: '', elementIds: key === OVERVIEW ? [] : [key], field: 'regionTitle', originalLength: title.trim().length, keptLength: regionTitle.length, fullTextIn: 'body' });
+      warnings.push(`Section title of ${key} is ${title.trim().length} characters; clipped to ${LIMITS.titleMax} in the region.`);
+    }
     const region: Region = {
       id,
-      title,
+      title: regionTitle,
       bounds: { x: minX, y: minY, w: maxX - minX, h: maxY - minY },
       ...(isHex6(color) ? { color: color.toLowerCase() } : {}),
     };
@@ -379,13 +446,38 @@ export function importClaudeWhiteboard(input: unknown, options: ImportOptions = 
   }): WorldNode => {
     const lower = spec.title.trim().toLowerCase();
     const tags = [...new Set([...(spec.tags ?? []), ...(lexTags.get(lower) ?? [])])];
+    const id = stableId('n', `${worldId}\u0000claude-whiteboard\u0000${spec.key}`, spec.title);
+    // Text that does not fit its field moves (in full) into the body, and the
+    // report records the clip, so a merged source is never cut silently.
+    const fullTitle = spec.title.trim();
+    const fullSummary = (spec.summary ?? '').trim();
+    const title = clip(fullTitle, LIMITS.titleMax);
+    const summary = clip(fullSummary, LIMITS.summaryMax);
+    let body = spec.body ?? '';
+    const clipped: { field: 'title' | 'summary'; full: string; kept: string }[] = [];
+    if (title.length < fullTitle.length) clipped.push({ field: 'title', full: fullTitle, kept: title });
+    if (summary.length < fullSummary.length) clipped.push({ field: 'summary', full: fullSummary, kept: summary });
+    for (const item of clipped) {
+      if (!body.includes(item.full)) body = body ? `${body}\n\n${item.full}` : item.full;
+    }
+    const bodyFits = body.length <= LIMITS.bodyMax;
+    for (const item of clipped) {
+      truncated.push({ nodeId: id, elementIds: spec.elementIds, field: item.field, originalLength: item.full.length, keptLength: item.kept.length, fullTextIn: bodyFits ? 'body' : null });
+      warnings.push(`Node ${id} (${spec.elementIds.join(', ') || spec.key}): ${item.field} clipped from ${item.full.length} to ${item.kept.length} characters; ${bodyFits ? 'full text kept in body' : 'body is full too, text lost'}.`);
+    }
+    if (!bodyFits) {
+      const full = body.length;
+      body = clip(body, LIMITS.bodyMax);
+      truncated.push({ nodeId: id, elementIds: spec.elementIds, field: 'body', originalLength: full, keptLength: body.length, fullTextIn: null });
+      warnings.push(`Node ${id} (${spec.elementIds.join(', ') || spec.key}): body clipped from ${full} to ${body.length} characters.`);
+    }
     const node: WorldNode = {
-      id: stableId('n', `${worldId}\u0000claude-whiteboard\u0000${spec.key}`, spec.title),
+      id,
       worldId,
       kind: spec.kind,
-      title: clip(spec.title, 300),
-      summary: clip(spec.summary ?? '', 2000),
-      body: spec.body ?? '',
+      title,
+      summary,
+      body,
       tags,
       canon: { status: 'draft' },
       media: spec.media ?? [],
@@ -483,6 +575,10 @@ export function importClaudeWhiteboard(input: unknown, options: ImportOptions = 
       extraMeta: { section: { ordinal: match[1] } },
     });
     disposition.set(header.key, { as: 'region', regionId, nodeId: node.id });
+  }
+  for (const entry of truncated) {
+    const status = entry.field === 'regionTitle' && entry.elementIds[0] ? disposition.get(entry.elementIds[0]) : undefined;
+    if (status?.as === 'region') entry.nodeId = status.nodeId;
   }
 
   const overviewTitle = texts.find((el) => !consumed(el) && el.size === 'title' && regionIdOf(el) === (overview?.region.id ?? null));
@@ -778,6 +874,7 @@ export function importClaudeWhiteboard(input: unknown, options: ImportOptions = 
       // record a fingerprint so the asset can be re-uploaded from the export.
       oversizedSrc = { length: img.src.length, hash53: hash53(img.src).toString(36), prefix: img.src.slice(0, 64) };
       warnings.push(`Image ${img.key} has a src of ${img.src.length} characters (limit ${ORIGINAL_SRC_MAX}); kept the node without media. Re-upload it from the export.`);
+      reupload++;
     } else if (img.src) {
       media.push({
         alt: clip(title, 300),
@@ -826,6 +923,11 @@ export function importClaudeWhiteboard(input: unknown, options: ImportOptions = 
     return undefined;
   };
   for (const arrow of elements.filter((el) => el.type === 'arrow')) {
+    for (const end of [arrow.from, arrow.to]) {
+      if (end && repeatedIds.has(end)) {
+        warnings.push(`Arrow ${arrow.key} points at "${end}", which ${duplicateIds.find((d) => d.id === end)!.occurrences} elements share; resolved it to the first in input order.`);
+      }
+    }
     const from = nodeForElement(arrow.from);
     const to = nodeForElement(arrow.to);
     if (!from || !to) {
@@ -869,7 +971,7 @@ export function importClaudeWhiteboard(input: unknown, options: ImportOptions = 
     schemaVersion: WORLD_GRAPH_SCHEMA_VERSION,
     world: {
       id: worldId,
-      title: worldTitle,
+      title: worldNode.title,
       summary: clip(worldNode.summary, 2000),
       version: 1,
       regions,
@@ -903,6 +1005,8 @@ export function importClaudeWhiteboard(input: unknown, options: ImportOptions = 
       const status = disposition.get(el.key)!;
       return status.as === 'skipped' ? [{ elementId: el.key, reason: status.reason }] : [];
     }),
+    truncated,
+    duplicateIds,
     warnings,
   };
 

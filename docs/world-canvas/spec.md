@@ -26,6 +26,7 @@ Rules:
 - `schemaVersion` is the literal `starlight.worldGraph.v1`. Only additive, optional fields may be added under v1. Anything else needs v2.
 - All timestamps are ISO 8601 UTC datetimes.
 - `world.version` is the graph revision. It goes up by 1 on every accepted op batch.
+- `world.retiredVersion` (optional, default 0) is the highest version any removed node or edge reached. New nodes and edges start at `retiredVersion + 1`, so versions are never reused when an id is deleted and recreated, and a stale op cannot hit the replacement. Stores must persist it.
 
 ### 2.1 Ids
 
@@ -81,7 +82,7 @@ Regions are authored areas (sections of the map). They are not the loading unit;
 | `layer` | int -1000..1000 | draw order, default 0 |
 | `createdBy` | `{harness, at, actor?}` | stamped by the server |
 | `updatedAt` | datetime | |
-| `version` | int >= 1 | starts at 1, +1 on every accepted change |
+| `version` | int >= 1 | starts at `world.retiredVersion + 1` (1 in a fresh world), +1 on every accepted change |
 | `meta` | object | provenance and extensions, not rendered as content |
 
 NodeKind: `world`, `region`, `story`, `book`, `chapter`, `scene`, `character`, `place`, `faction`, `artifact`, `event`, `house`, `gate`, `god`, `godbeast`, `concept`, `note`, `image`.
@@ -98,7 +99,7 @@ NodeKind: `world`, `region`, `story`, `book`, `chapter`, `scene`, `character`, `
 | `needsReupload` | boolean | true when only `originalSrc` is known |
 | `alt` | string | default `""` |
 | `role` | `cover`, `portrait`, `plate`, `illustration`, `reference`, `placeholder`, `attachment` | |
-| `href` | URL | where the media links to (source doc, Figma frame) |
+| `href` | http(s) URL, relative path or R2 key | where the media links to (source doc, Figma frame). Other schemes (`javascript:`, `data:`, ...) are rejected by the schema |
 | `width`, `height` | number > 0 | optional |
 
 A media entry must have `r2Key`, or `url`, or `originalSrc` with `needsReupload: true`.

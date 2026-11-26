@@ -39,12 +39,38 @@ export function tileKey(position: Position, tileSize = TILE_SIZE): string {
   return `${Math.floor(position.x / tileSize)}:${Math.floor(position.y / tileSize)}`;
 }
 
-/** Tile keys overlapped by a rectangle, row-major. */
-export function tileKeysForBounds(bounds: Bounds, tileSize = TILE_SIZE): string[] {
+/**
+ * Most tiles one tileKeysForBounds call will list. 4096 tiles of 2048 units
+ * cover a 131k x 131k square, far more than any viewport or region needs.
+ */
+export const MAX_TILES_PER_QUERY = 4096;
+
+/**
+ * Tile keys overlapped by a rectangle, row-major.
+ *
+ * Throws RangeError for non-finite input, a non-positive tile size, more than
+ * `maxTiles` tiles, or tile indices beyond Number.MAX_SAFE_INTEGER (where
+ * `index + 1` no longer advances and the loop would never end).
+ */
+export function tileKeysForBounds(bounds: Bounds, tileSize = TILE_SIZE, maxTiles = MAX_TILES_PER_QUERY): string[] {
+  if (!Number.isFinite(tileSize) || tileSize <= 0) throw new RangeError(`tileSize must be a finite number > 0, got ${tileSize}`);
+  for (const [name, value] of Object.entries({ x: bounds.x, y: bounds.y, w: bounds.w, h: bounds.h })) {
+    if (!Number.isFinite(value)) throw new RangeError(`bounds.${name} must be finite, got ${value}`);
+  }
+  if (bounds.w < 0 || bounds.h < 0) throw new RangeError('bounds.w and bounds.h must be >= 0.');
   const x0 = Math.floor(bounds.x / tileSize);
   const y0 = Math.floor(bounds.y / tileSize);
   const x1 = Math.floor((bounds.x + bounds.w) / tileSize);
   const y1 = Math.floor((bounds.y + bounds.h) / tileSize);
+  for (const index of [x0, y0, x1, y1]) {
+    if (!Number.isSafeInteger(index)) {
+      throw new RangeError(`bounds reach tile index ${index}, beyond the safe integer range; query a smaller area.`);
+    }
+  }
+  const count = (x1 - x0 + 1) * (y1 - y0 + 1);
+  if (!Number.isSafeInteger(count) || count > maxTiles) {
+    throw new RangeError(`bounds cover ${count} tiles; at most ${maxTiles} may be listed in one query.`);
+  }
   const keys: string[] = [];
   for (let ty = y0; ty <= y1; ty++) {
     for (let tx = x0; tx <= x1; tx++) keys.push(`${tx}:${ty}`);

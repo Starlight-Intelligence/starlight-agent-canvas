@@ -127,6 +127,37 @@ export const boundsSchema = z.object({
 });
 export type Bounds = z.infer<typeof boundsSchema>;
 
+/**
+ * A link a user can click: an absolute http(s) URL, or a relative path / R2
+ * key resolved against the app's own origin. Executable schemes
+ * (javascript:, data:, vbscript:, ...) are rejected here, in the shared
+ * schema, so no consumer has to remember to filter them. Whitespace and
+ * control characters are rejected outright because browsers strip them from
+ * URLs ("java\tscript:" runs as "javascript:").
+ */
+export function isSafeLinkHref(value: string): boolean {
+  if (value.length === 0 || value.length > 2048) return false;
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u0020\u007f-\u009f\\]/.test(value)) return false;
+  // Protocol-relative ("//host/x") is another origin, not a relative path.
+  if (value.startsWith('//')) return false;
+  // A colon before the first / ? # means the value has a scheme.
+  const schemeEnd = value.search(/[/?#]/);
+  const head = schemeEnd === -1 ? value : value.slice(0, schemeEnd);
+  if (!head.includes(':')) return true;
+  if (!/^https?:\/\//i.test(value)) return false;
+  try {
+    const url = new URL(value);
+    return (url.protocol === 'http:' || url.protocol === 'https:') && url.hostname.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+export const safeLinkHrefSchema = z.string().refine(isSafeLinkHref, {
+  message: 'href must be an http(s) URL or a relative path / R2 key.',
+});
+
 export const MEDIA_ROLES = ['cover', 'portrait', 'plate', 'illustration', 'reference', 'placeholder', 'attachment'] as const;
 export const mediaRoleSchema = z.enum(MEDIA_ROLES);
 
@@ -143,8 +174,11 @@ export const mediaSchema = z.object({
   url: z.url({ protocol: /^https?$/ }).optional(),
   alt: z.string().max(LIMITS.titleMax).default(''),
   role: mediaRoleSchema,
-  /** Where the media links to when clicked (source document, Figma frame). */
-  href: z.url().optional(),
+  /**
+   * Where the media links to when clicked (source document, Figma frame).
+   * http(s) or relative/R2 key only; see safeLinkHrefSchema.
+   */
+  href: safeLinkHrefSchema.optional(),
   originalSrc: z.string().min(1).max(100_000).optional(),
   needsReupload: z.boolean().optional(),
   width: z.number().finite().positive().optional(),
@@ -176,7 +210,7 @@ export const worldNodeSchema = z.object({
   layer: z.number().int().min(-1000).max(1000).default(0),
   createdBy: actorSchema,
   updatedAt: z.iso.datetime(),
-  /** Starts at 1, +1 on every accepted change to this node. */
+  /** Starts above world.retiredVersion (1 in a fresh world), +1 on every accepted change to this node. */
   version: z.number().int().positive(),
   /** Free-form provenance and extension data. Not rendered as content. */
   meta: z.record(z.string(), z.unknown()).default({}),
@@ -214,6 +248,13 @@ export const worldSchema = z.object({
   version: z.number().int().nonnegative(),
   regions: z.array(regionSchema).max(LIMITS.regionsMax).default([]),
   updatedAt: z.iso.datetime(),
+  /**
+   * Highest version any removed node or edge reached. New nodes and edges
+   * start at retiredVersion + 1, so versions are never reused when an id is
+   * deleted and recreated, and a stale op cannot hit the replacement.
+   * Absent means 0.
+   */
+  retiredVersion: z.number().int().nonnegative().optional(),
 });
 export type World = z.infer<typeof worldSchema>;
 
