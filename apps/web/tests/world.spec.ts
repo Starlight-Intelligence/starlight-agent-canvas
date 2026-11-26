@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 
 // The demo world is a synthetic fixture (tests/fixtures/worlds/demo.world.json).
 // The server keeps edits in memory, so tests do not change the fixture file.
@@ -7,10 +7,14 @@ async function ready(page: Page) {
   await page.waitForFunction(() => Number(document.querySelector('.wc')?.getAttribute('data-total-nodes') ?? 0) > 0);
 }
 
-/** Inspector version badge as a number. Versions come from one world-wide counter, so tests compare, not hard-code. */
-async function inspectorVersion(page: Page): Promise<number> {
-  const text = await page.locator('.wc-inspector .wc-inspector-version').textContent();
-  return Number((text ?? '').replace(/^v/, ''));
+/**
+ * The node version the inspector shows ("v7" -> 7). Versions come from one
+ * world-wide counter, so after a change the number goes up but its exact
+ * value depends on earlier writes to the shared demo world.
+ */
+async function versionOf(inspector: Locator): Promise<number> {
+  const text = await inspector.locator('.wc-inspector-version').textContent();
+  return Number(/^v(\d+)$/.exec(text?.trim() ?? '')?.[1] ?? Number.NaN);
 }
 
 test.describe('world canvas', () => {
@@ -52,11 +56,10 @@ test.describe('world canvas', () => {
     await page.goto('/world/demo?node=n_gen_1');
     await ready(page);
     const inspector = page.getByRole('complementary', { name: 'Inspector' });
-    await expect(inspector.locator('.wc-inspector-version')).toHaveText(/^v\d+$/);
-    const before = await inspectorVersion(page);
+    const before = await versionOf(inspector);
     await inspector.getByLabel('Summary').fill('A harbor where the sea is glass.');
     await inspector.getByRole('button', { name: 'Save changes' }).click();
-    await expect.poll(() => inspectorVersion(page)).toBeGreaterThan(before);
+    await expect.poll(() => versionOf(inspector)).toBeGreaterThan(before);
     const activity = page.getByRole('complementary', { name: 'Activity' });
     await expect(activity.getByText('Edited Harbor of glass')).toBeVisible();
     await expect(activity.locator('.wc-act--confirmed .wc-harness', { hasText: 'human' }).first()).toBeVisible();
@@ -152,8 +155,7 @@ test.describe('world canvas', () => {
     await page.goto('/world/demo?node=n_gen_6&zoom=1');
     await ready(page);
     const inspector = page.getByRole('complementary', { name: 'Inspector' });
-    await expect(inspector.locator('.wc-inspector-version')).toHaveText(/^v\d+$/);
-    const before = await inspectorVersion(page);
+    const before = await versionOf(inspector);
     await inspector.getByLabel('Summary').fill('Draft that must survive a move');
     const box = await page.locator('.react-flow__node[data-id="n_gen_6"]').boundingBox();
     expect(box).not.toBeNull();
@@ -161,8 +163,7 @@ test.describe('world canvas', () => {
     await page.mouse.down();
     await page.mouse.move(box!.x + 120, box!.y + 60, { steps: 8 });
     await page.mouse.up();
-    // The move is accepted when the node gets a newer version.
-    await expect.poll(() => inspectorVersion(page)).toBeGreaterThan(before);
+    await expect.poll(() => versionOf(inspector)).toBeGreaterThan(before);
     await expect(inspector.getByLabel('Summary')).toHaveValue('Draft that must survive a move');
   });
 });
