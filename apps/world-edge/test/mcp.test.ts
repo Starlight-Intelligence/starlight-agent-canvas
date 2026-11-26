@@ -66,6 +66,16 @@ describe('MCP over HTTP', () => {
     expect(body.result?.tools?.map((t) => t.name).sort()).toEqual([...TOOL_NAMES].sort());
   });
 
+  it('describes add_node as draft-only and points to propose_canon', async () => {
+    const { body } = await rpc(testEnv.TEST_TOKENS.claude, 'tools/list');
+    const tools = (body.result?.tools ?? []) as { name: string; description?: string }[];
+    const description = tools.find((t) => t.name === 'add_node')?.description ?? '';
+    expect(description).toContain('draft');
+    expect(description).toContain('propose_canon');
+    // The schema takes no canon field, so the description must not offer one.
+    expect(description).not.toMatch(/canon may be|may be draft or proposed|draft or proposed/i);
+  });
+
   it('writes through the WorldAgent and records the calling harness', async () => {
     const worldId = worldName('mcp');
     const added = await rpc(testEnv.TEST_TOKENS.codex, 'tools/call', {

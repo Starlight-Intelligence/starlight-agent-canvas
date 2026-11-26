@@ -11,6 +11,7 @@ export {
 export {
   CANON_PROPOSAL_LIMITS,
   canonProposalRequestSchema,
+  PROPOSAL_ID_PATTERN,
   type CanonProposalRequest,
   type CanonProposalRequestInput,
 } from './request.js';
@@ -23,7 +24,10 @@ export {
 export {
   buildCanonProposal,
   inlineMarkdown,
+  isBuiltCanonProposal,
+  proposalSlug,
   slugify,
+  stripInvisible,
   GENERATOR,
   type BuildCanonProposalOptions,
   type CanonProposalFile,

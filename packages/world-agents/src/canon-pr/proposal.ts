@@ -4,19 +4,39 @@ import { CanonProposalError } from './errors.js';
 import { assertProposalPathAllowed, PROPOSALS_DIR } from './guard.js';
 import { CANON_PROPOSAL_LIMITS, canonProposalRequestSchema, type CanonProposalRequestInput } from './request.js';
 
+const notBlank = (value: string) => value.trim().length > 0;
+
 export const GENERATOR = '@starlight-agent-canvas/world-agents';
 const PR_TITLE_MAX = 250;
 
-/** Everything needed to open the canon PR. Pure data; deterministic for the same inputs and clock. */
+/** Type-only brand: a CanonProposalFile can only be made by buildCanonProposal. */
+declare const BUILT_BY_BUILDER: unique symbol;
+
+/**
+ * Everything needed to open the canon PR. Pure data; deterministic for the
+ * same inputs and clock. Frozen, and only buildCanonProposal makes one:
+ * openCanonPr and planCanonPr refuse any object it did not return, so a caller
+ * cannot hand-write the Markdown or PR body (for example to add a fake
+ * approval row) and still get it published.
+ */
 export interface CanonProposalFile {
-  slug: string;
-  date: string;
-  path: string;
-  branch: string;
-  markdown: string;
-  commitMessage: string;
-  prTitle: string;
-  prBody: string;
+  readonly [BUILT_BY_BUILDER]: true;
+  readonly slug: string;
+  readonly date: string;
+  readonly path: string;
+  readonly branch: string;
+  readonly markdown: string;
+  readonly commitMessage: string;
+  readonly prTitle: string;
+  readonly prBody: string;
+}
+
+/** Every object buildCanonProposal returned. Identity, not shape, is what counts. */
+const BUILT = new WeakSet<object>();
+
+/** True only for an object returned by buildCanonProposal. */
+export function isBuiltCanonProposal(value: unknown): value is CanonProposalFile {
+  return typeof value === 'object' && value !== null && BUILT.has(value);
 }
 
 export interface BuildCanonProposalOptions {
@@ -34,6 +54,20 @@ export function slugify(input: string): string {
   const slug = folded.replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
     .slice(0, CANON_PROPOSAL_LIMITS.slugMax).replace(/-+$/, '');
   return slug || 'proposal';
+}
+
+/**
+ * Control (Cc) and format (Cf) characters, except tab and newline. Cf covers
+ * the bidi embeddings, overrides and isolates (U+202A-U+202E, U+2066-U+2069),
+ * U+200E/U+200F marks, zero-width space/joiners (U+200B-U+200D), U+2060,
+ * U+FEFF and soft hyphens: characters that render as nothing or reorder the
+ * text around them, so a reviewer would not see what the PR really says.
+ */
+const INVISIBLE = /(?![\t\n])[\p{Cc}\p{Cf}]/gu;
+
+/** Removes control and format characters; CRLF and lone CR become LF first. */
+export function stripInvisible(text: string): string {
+  return text.replace(/\r\n?/g, '\n').replace(INVISIBLE, '');
 }
 
 /** Collapses all whitespace, including newlines, to single spaces. */
@@ -120,7 +154,7 @@ function firstIssue(error: z.ZodError): string {
   return `${issue?.path.join('.') || '(root)'}: ${issue?.message ?? 'invalid'}`;
 }
 
-function resolveNodes(worldId: string, nodeIds: readonly string[], nodes: readonly WorldNode[]): WorldNode[] {
+function resolveNodes(worldId: string, nodeIds: readonly string[], nodes: readonly WorldNode[], worldVersion: number | undefined): WorldNode[] {
   return nodeIds.map((id) => {
     const matches = nodes.filter((node) => node.id === id && node.worldId === worldId);
     if (matches.length === 0) {
@@ -137,8 +171,56 @@ function resolveNodes(worldId: string, nodeIds: readonly string[], nodes: readon
     if (node.canon.status === 'canon') {
       throw new CanonProposalError('ALREADY_CANON', `Node ${id} is already canon; there is nothing to propose.`, id);
     }
+    if (node.canon.status !== 'proposed') {
+      // propose_canon marks nodes proposed and any later edit puts them back to
+      // draft, so a draft node is either unproposed or edited since.
+      throw new CanonProposalError(
+        'STALE_PROPOSAL',
+        `Node ${id} is ${node.canon.status}, not proposed: it was never proposed or was edited after the proposal. Propose it again with propose_canon.`,
+        id,
+      );
+    }
+    if (worldVersion !== undefined && node.version > worldVersion) {
+      throw new CanonProposalError(
+        'STALE_PROPOSAL',
+        `Node ${id} is at version ${node.version}, newer than the proposal (world version ${worldVersion}); it changed after it was proposed. Propose it again with propose_canon.`,
+        id,
+      );
+    }
     return node;
   });
+}
+
+/** The node with every text field run through stripInvisible. */
+function cleanNode(node: WorldNode): WorldNode {
+  return {
+    ...node,
+    title: stripInvisible(node.title),
+    summary: stripInvisible(node.summary),
+    body: stripInvisible(node.body),
+    tags: node.tags.map(stripInvisible),
+    canon: node.canon.ref === undefined ? node.canon : { ...node.canon, ref: stripInvisible(node.canon.ref) },
+  };
+}
+
+/** 32-bit FNV-1a of the UTF-16 code units, as 8 hex digits. Not a security hash: it only keeps distinct ids apart in slugs. */
+function fnv1a(text: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash.toString(16).padStart(8, '0');
+}
+
+/**
+ * Slug for a recorded proposal: `proposal-<id slug>-<fnv1a(id)>`. Same id, same
+ * slug (and so the same branch) on every run; the hash keeps ids apart that
+ * slugify would fold together (case, `_` versus `-`).
+ */
+export function proposalSlug(proposalId: string): string {
+  const head = slugify(`proposal ${proposalId}`).slice(0, CANON_PROPOSAL_LIMITS.slugMax - 9).replace(/-+$/, '');
+  return `${head}-${fnv1a(proposalId)}`;
 }
 
 function canonStatusText(node: WorldNode): string {
@@ -157,8 +239,10 @@ function renderMarkdown(input: {
   actor?: string;
   rationale: string;
   nodes: WorldNode[];
+  proposalId?: string;
+  worldVersion?: number;
 }): string {
-  const { title, date, worldId, harness, actor, rationale, nodes } = input;
+  const { title, date, worldId, harness, actor, rationale, nodes, proposalId, worldVersion } = input;
   const lines: string[] = [];
   const push = (...more: string[]) => lines.push(...more);
 
@@ -224,6 +308,8 @@ function renderMarkdown(input: {
     '| Field | Value |',
     '|-------|-------|',
     `| World Id | \`${worldId}\` |`,
+    `| Proposal Id | ${proposalId ? `\`${proposalId}\`` : '—'} |`,
+    `| World Version At Proposal | ${worldVersion ?? '—'} |`,
     `| Nodes | ${nodes.map((node) => `\`${node.id}\` v${node.version}`).join(', ')} |`,
     `| Proposer Harness | \`${harness}\` |`,
     `| Proposer Actor | ${actor ? inline(actor) : '—'} |`,
@@ -263,8 +349,9 @@ function renderPrBody(input: {
   actor?: string;
   rationale: string;
   nodes: WorldNode[];
+  proposalId?: string;
 }): string {
-  const { title, path, worldId, harness, actor, rationale, nodes } = input;
+  const { title, path, worldId, harness, actor, rationale, nodes, proposalId } = input;
   return [
     `## Canon proposal: ${inline(title)}`,
     '',
@@ -272,6 +359,7 @@ function renderPrBody(input: {
     '',
     `- **File:** \`${path}\``,
     `- **World:** \`${worldId}\``,
+    ...(proposalId ? [`- **Proposal id:** \`${proposalId}\``] : []),
     `- **Proposed by harness:** \`${harness}\`${actor ? ` (actor: ${inline(actor)})` : ''}`,
     '',
     '### Rationale',
@@ -313,19 +401,36 @@ export function buildCanonProposal(
   if (!parsedNodes.success) {
     throw new CanonProposalError('INVALID_NODE', `Invalid node at nodes.${firstIssue(parsedNodes.error)}`);
   }
-  const req = parsedRequest.data;
-  const selected = resolveNodes(req.worldId, req.nodeIds, parsedNodes.data);
+  const raw = parsedRequest.data;
+  const req = {
+    ...raw,
+    title: stripInvisible(raw.title),
+    rationale: stripInvisible(raw.rationale),
+    proposer: raw.proposer.actor === undefined
+      ? { harness: raw.proposer.harness }
+      : { harness: raw.proposer.harness, actor: stripInvisible(raw.proposer.actor) },
+    slug: raw.slug === undefined ? undefined : stripInvisible(raw.slug),
+  };
+  for (const key of ['title', 'rationale'] as const) {
+    if (!notBlank(req[key])) {
+      throw new CanonProposalError('INVALID_REQUEST', `Invalid canon proposal request at ${key}: ${key} is blank once invisible characters are removed.`);
+    }
+  }
+  if (req.proposer.actor !== undefined && !notBlank(req.proposer.actor)) {
+    throw new CanonProposalError('INVALID_REQUEST', 'Invalid canon proposal request at proposer.actor: actor is blank once invisible characters are removed.');
+  }
+  const selected = resolveNodes(req.worldId, req.nodeIds, parsedNodes.data, req.worldVersion).map(cleanNode);
 
   const date = req.date ?? utcDate(options.now ?? (() => new Date()));
-  const slug = slugify(req.slug ?? req.title);
+  const slug = req.proposalId !== undefined ? proposalSlug(req.proposalId) : slugify(req.slug ?? req.title);
   const path = `${PROPOSALS_DIR}${date}-${slug}.md`;
   assertProposalPathAllowed(path);
   const branch = `canon/${slug}`;
   const title = oneLine(req.title);
   const { harness, actor } = req.proposer;
 
-  const markdown = renderMarkdown({ title, date, worldId: req.worldId, harness, actor, rationale: req.rationale, nodes: selected });
-  const prBody = renderPrBody({ title, path, worldId: req.worldId, harness, actor, rationale: req.rationale, nodes: selected });
+  const markdown = renderMarkdown({ title, date, worldId: req.worldId, harness, actor, rationale: req.rationale, nodes: selected, proposalId: req.proposalId, worldVersion: req.worldVersion });
+  const prBody = renderPrBody({ title, path, worldId: req.worldId, harness, actor, rationale: req.rationale, nodes: selected, proposalId: req.proposalId });
   const fullPrTitle = `Canon proposal: ${title}`;
   const titleChars = Array.from(fullPrTitle);
   const prTitle = titleChars.length > PR_TITLE_MAX ? `${titleChars.slice(0, PR_TITLE_MAX - 1).join('')}…` : fullPrTitle;
@@ -338,5 +443,18 @@ export function buildCanonProposal(
     `Proposed-by: ${harness}`,
   ].join('\n');
 
-  return { slug, date, path, branch, markdown, commitMessage, prTitle, prBody };
+  // Last pass, so nothing invisible reaches GitHub even if a renderer adds it.
+  const file = {
+    slug,
+    date,
+    path,
+    branch,
+    markdown: stripInvisible(markdown),
+    commitMessage: stripInvisible(commitMessage),
+    prTitle: stripInvisible(prTitle),
+    prBody: stripInvisible(prBody),
+  } as CanonProposalFile;
+  Object.freeze(file);
+  BUILT.add(file);
+  return file;
 }

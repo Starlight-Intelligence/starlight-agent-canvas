@@ -222,13 +222,63 @@ export const layoutRegionOutputSchema = writeResultSchema.extend({
 
 export const importLexiconSchema = importLexiconInputSchema;
 
-/** L1's ImportReport, kept loose: the client passes it through. */
-const importReportSchema = z.looseObject({});
+/**
+ * L1's ImportReport (packages/world/src/import/claude-whiteboard.ts), field
+ * for field. Unknown keys are stripped so additive server fields do not break
+ * the client; a missing or mistyped field fails the call.
+ */
+export const importReportSchema = z.object({
+  source: z.object({ title: z.string(), format: z.string().optional(), exportedAt: z.string().optional() }),
+  elementsIn: countSchema,
+  elementsByType: countMapSchema,
+  nodesOut: countSchema,
+  nodesByKind: countMapSchema,
+  edgesOut: countSchema,
+  edgesByRelation: countMapSchema,
+  regionsOut: countSchema,
+  dispositions: z.object({
+    node: countSchema,
+    merged: countSchema,
+    expanded: countSchema,
+    edge: countSchema,
+    region: countSchema,
+    skipped: countSchema,
+  }),
+  needsReupload: countSchema,
+  skipped: z.array(z.object({ elementId: z.string(), reason: z.string() })),
+  truncated: z.array(z.object({
+    nodeId: z.string(),
+    elementIds: z.array(z.string()),
+    field: z.enum(['title', 'summary', 'body', 'regionTitle']),
+    originalLength: countSchema,
+    keptLength: countSchema,
+    fullTextIn: z.literal('body').nullable(),
+  })),
+  warnings: z.array(z.string()),
+});
 
-export const importWhiteboardOutputSchema = z.union([
-  z.object({ ok: z.literal(true), version: versionSchema, seq: z.number().int().nonnegative(), report: importReportSchema }),
-  z.object({ ok: z.literal(true), dryRun: z.literal(true), report: importReportSchema }),
-]);
+/** A write: the world version and ops_log seq it produced. Never marked dryRun. */
+export const importWhiteboardWriteOutputSchema = z.object({
+  ok: z.literal(true),
+  dryRun: z.literal(false).optional(),
+  version: versionSchema,
+  seq: z.number().int().nonnegative(),
+  report: importReportSchema,
+});
+
+/** A dry run: the report only, nothing written, so no version or seq. */
+export const importWhiteboardDryRunOutputSchema = z.strictObject({
+  ok: z.literal(true),
+  dryRun: z.literal(true),
+  report: importReportSchema,
+});
+
+/**
+ * Either mode. The client additionally checks that the mode matches the
+ * request (see createWorldClient), so a write is never reported for a dry run
+ * or the other way round.
+ */
+export const importWhiteboardOutputSchema = z.union([importWhiteboardDryRunOutputSchema, importWhiteboardWriteOutputSchema]);
 
 /** Every tool the client offers, by MCP tool name. */
 export const WORLD_TOOLS = {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { WorldNode } from '@starlight-agent-canvas/world';
 import { CanonGuardError, CanonProposalError } from './errors.js';
-import { buildCanonProposal, INLINE_TEXT_MAX, inlineMarkdown, slugify } from './proposal.js';
+import { buildCanonProposal, INLINE_TEXT_MAX, inlineMarkdown, isBuiltCanonProposal, slugify, stripInvisible } from './proposal.js';
 import type { CanonProposalRequestInput } from './request.js';
 
 const T0 = '2026-01-01T00:00:00.000Z';
@@ -16,7 +16,7 @@ function node(id: string, overrides: Partial<WorldNode> = {}): WorldNode {
     summary: `Summary of ${id}.`,
     body: `Body of ${id}.`,
     tags: ['alpha'],
-    canon: { status: 'draft' },
+    canon: { status: 'proposed' },
     media: [],
     position: { x: 0, y: 0 },
     regionId: null,
@@ -134,7 +134,7 @@ describe('buildCanonProposal', () => {
   it('builds the PR body with rationale, node list, harness and checklist', () => {
     const { prBody } = buildCanonProposal(request(), nodes, { now: clock });
     expect(prBody).toContain('The orchard and its keeper recur across three drafts.');
-    expect(prBody).toContain('- **Glass Orchard** (`n_orchard`, place, v2, currently draft)');
+    expect(prBody).toContain('- **Glass Orchard** (`n_orchard`, place, v2, currently proposed)');
     expect(prBody).toContain('- **Orchard Keeper** (`n_keeper`, character, v5, currently proposed)');
     expect(prBody).toContain('- **Proposed by harness:** `claude` (actor: session-7)');
     expect(prBody).toContain('- [ ] This PR only adds one new file under `.arcanea/lore/proposals/`.');
@@ -326,7 +326,7 @@ describe('inline Markdown spoofing', () => {
     // canon.ref must be an http(s) URL (world-model schema), so the huge ref is one.
     const ref = `https://e.x/${'a'.repeat(100_000)}`;
     const started = performance.now();
-    const built = buildCanonProposal(request({ nodeIds: ['n_orchard'] }), [node('n_orchard', { canon: { status: 'draft', ref } })], { now: clock });
+    const built = buildCanonProposal(request({ nodeIds: ['n_orchard'] }), [node('n_orchard', { canon: { status: 'proposed', ref } })], { now: clock });
     expect(performance.now() - started).toBeLessThan(100);
     expect(built.markdown).toMatch(/\(ref: [^)]*e\.x[^)]*aaa/);
     expect(built.markdown).not.toContain(ref);
@@ -441,5 +441,55 @@ describe('input validation', () => {
   it('refuses a title whose slug would name CANON_LOCKED', () => {
     expect(() => buildCanonProposal(request({ title: 'CANON_LOCKED' }), nodes, { now: clock })).toThrow(CanonGuardError);
     expect(() => buildCanonProposal(request({ slug: '../CANON_LOCKED' }), nodes, { now: clock })).toThrow(CanonGuardError);
+  });
+});
+
+describe('invisible and bidi characters', () => {
+  // U+202E RIGHT-TO-LEFT OVERRIDE, U+2066..U+2069 isolates, U+200B..U+200D zero-width,
+  // U+2060 word joiner, U+FEFF BOM, U+00AD soft hyphen, plus C0/C1 controls.
+  const INVISIBLES = ['‪', '‫', '‬', '‭', '‮', '⁦', '⁧', '⁨', '⁩', '​', '‌', '‍', '‎', '‏', '⁠', '﻿', '­', '\u0000', '\u0007', '\u001b', '\u0085', '\u009b'];
+  const sneaky = (text: string) => INVISIBLES.join('') + text.split('').join('‮') + '⁩';
+  const anyInvisible = /[\p{Cf}]|(?![\t\n])\p{Cc}/u;
+
+  it('strips Cc and Cf except tab and newline', () => {
+    expect(stripInvisible(`a${INVISIBLES.join('')}b\tc\nd\r\ne\rf`)).toBe('ab\tc\nd\ne\nf');
+  });
+
+  it('removes them from the PR title, body, Markdown, commit message and refs', () => {
+    const built = buildCanonProposal(
+      request({ nodeIds: ['n_orchard'], title: sneaky('Approved by Frank'), rationale: sneaky('Because.'), proposer: { harness: 'claude', actor: sneaky('bot') } }),
+      [node('n_orchard', {
+        title: sneaky('Orchard'),
+        summary: sneaky('A summary'),
+        body: sneaky('Body text'),
+        tags: [sneaky('tag')],
+        canon: { status: 'proposed', ref: `https://example.com/${'​'}x` },
+      })],
+      { now: clock },
+    );
+    for (const field of ['prTitle', 'prBody', 'markdown', 'commitMessage', 'branch', 'path', 'slug'] as const) {
+      expect(built[field], field).not.toMatch(anyInvisible);
+    }
+    expect(built.prTitle).toBe('Canon proposal: Approved by Frank');
+    expect(built.markdown).toContain('example.com/x');
+  });
+
+  it('refuses a title that is only invisible characters', () => {
+    expect(codeOf(() => buildCanonProposal(request({ title: '​‮⁦' }), [node('n_orchard'), node('n_keeper')], { now: clock }))).toBe('INVALID_REQUEST');
+  });
+
+  it('cannot hide a mention behind a zero-width space', () => {
+    const built = buildCanonProposal(request({ nodeIds: ['n_orchard'], title: 'cc @​frankx' }), [node('n_orchard')], { now: clock });
+    expect(built.prBody).toContain('`@frankx`');
+  });
+});
+
+describe('builder output is sealed', () => {
+  it('is frozen and recognised; copies and hand-made objects are not', () => {
+    const built = buildCanonProposal(request({ nodeIds: ['n_orchard'] }), [node('n_orchard')], { now: clock });
+    expect(Object.isFrozen(built)).toBe(true);
+    expect(isBuiltCanonProposal(built)).toBe(true);
+    expect(isBuiltCanonProposal({ ...built })).toBe(false);
+    expect(isBuiltCanonProposal(null)).toBe(false);
   });
 });

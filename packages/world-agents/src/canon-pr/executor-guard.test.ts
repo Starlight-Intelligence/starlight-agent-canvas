@@ -44,7 +44,7 @@ const node: WorldNode = {
   summary: '',
   body: 'Body.',
   tags: [],
-  canon: { status: 'draft' },
+  canon: { status: 'proposed' },
   media: [],
   position: { x: 0, y: 0 },
   regionId: null,
@@ -65,6 +65,8 @@ function github() {
   const fetch: FetchLike = async (url, init) => {
     calls.push(`${init.method} ${url}`);
     const path = new URL(url).pathname;
+    if (init.method === 'GET' && path.endsWith('/pulls')) return Response.json([]);
+    if (init.method === 'GET' && path.includes('/git/ref/heads/canon/')) return Response.json({ message: 'Not Found' }, { status: 404 });
     if (init.method === 'GET' && path.includes('/git/ref/heads/')) return Response.json({ object: { sha: SHA } });
     if (init.method === 'GET' && path.includes('/contents/')) return new Response('{}', { status: 404 });
     if (init.method === 'GET') return Response.json({ default_branch: 'main' });
@@ -85,7 +87,7 @@ describe('openCanonPr routes every request through the write guard', () => {
   it('passes each request to the guard before fetch sees it', async () => {
     const gh = github();
     await run(gh.fetch);
-    expect(gh.calls).toHaveLength(6);
+    expect(gh.calls).toHaveLength(8);
     expect(hooks.seen).toEqual(gh.calls);
   });
 
@@ -99,12 +101,12 @@ describe('openCanonPr routes every request through the write guard', () => {
     expect(error).toBeInstanceOf(CanonGuardError);
     expect(error).toMatchObject({ layer: 'request', method: 'PUT' });
     expect(gh.calls.some((c) => c.startsWith('PUT'))).toBe(false);
-    expect(gh.calls).toHaveLength(4);
+    expect(gh.calls).toHaveLength(6);
     // The branch already exists at this point, so the refusal reports it.
     const guardError = error as CanonGuardError;
     expect(guardError.branch).toBe(proposal.branch);
     expect(guardError.path).toBe(proposal.path);
-    expect(guardError.calls!.map((c) => c.step)).toEqual(['get-repo', 'get-base-ref', 'create-branch', 'check-file']);
+    expect(guardError.calls!.map((c) => c.step)).toEqual(['get-repo', 'find-pr', 'check-branch', 'get-base-ref', 'create-branch', 'check-file']);
     expect(guardError.message).toContain(`Branch ${proposal.branch} was created before this refusal and was left in place`);
     expect(guardError.reason).not.toContain('left in place');
   });

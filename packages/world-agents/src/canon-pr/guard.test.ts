@@ -20,7 +20,7 @@ function node(id: string): WorldNode {
     summary: '',
     body: 'Body.',
     tags: [],
-    canon: { status: 'draft' },
+    canon: { status: 'proposed' },
     media: [],
     position: { x: 0, y: 0 },
     regionId: null,
@@ -55,6 +55,8 @@ function github(checkFileStatus = 404) {
   const fetch = async (url: string, init: CanonFetchInit) => {
     calls.push({ method: init.method, url, body: init.body ? JSON.parse(init.body) : null });
     const path = new URL(url).pathname;
+    if (init.method === 'GET' && path.endsWith('/pulls')) return Response.json([]);
+    if (init.method === 'GET' && path.includes('/git/ref/heads/canon/')) return Response.json({ message: 'Not Found' }, { status: 404 });
     if (init.method === 'GET' && path.includes('/git/ref/heads/')) return Response.json({ object: { sha: SHA } });
     if (init.method === 'GET' && path.includes('/contents/')) return new Response('{}', { status: checkFileStatus });
     if (init.method === 'GET') return Response.json({ default_branch: 'main' });
@@ -112,7 +114,7 @@ describe('layer 1: assertProposalPathAllowed', () => {
     expect(guardRefusal(() => assertProposalPathAllowed(42))?.layer).toBe('path');
   });
 
-  it('stops openCanonPr before the token or any request when the path is tampered', async () => {
+  it('stops openCanonPr before the token or any request when the path is tampered (a copy is not builder output)', async () => {
     const gh = github();
     let tokenCalls = 0;
     const good = build({});
@@ -123,7 +125,7 @@ describe('layer 1: assertProposalPathAllowed', () => {
         repo: 'arcanea-ai-app',
         getToken: () => { tokenCalls++; return 'tok'; },
         fetch: gh.fetch,
-      })).rejects.toMatchObject({ name: 'CanonGuardError', layer: 'path' });
+      })).rejects.toMatchObject({ name: 'CanonPrError', code: 'INVALID_OPTIONS', step: 'setup' });
     }
     expect(tokenCalls).toBe(0);
     expect(gh.calls).toHaveLength(0);
@@ -134,32 +136,131 @@ describe('layer 2: createCanonWriteGuard', () => {
   const contentsUrl = `${REPO}/contents/${GOOD_PATH}`;
   const putBody = { message: 'm', content: 'eA==', branch: 'canon/the-glass-orchard' };
 
-  function guarded() {
+  /**
+   * A fake GitHub behind the guard: the default branch is `main`, canon/
+   * branches do not exist until created, writes succeed.
+   */
+  function guarded(options: { defaultBranch?: string | null; existing?: string[] } = {}) {
     const passed: string[] = [];
     const inits: CanonFetchInit[] = [];
+    const existing = new Set(options.existing ?? []);
     const inner = async (url: string, init: CanonFetchInit) => {
       passed.push(`${init.method} ${url}`);
       inits.push(init);
+      const path = new URL(url).pathname;
+      if (init.method === 'GET' && path === '/repos/Arcanea-Labs/arcanea-ai-app') {
+        return options.defaultBranch === null ? new Response('{}', { status: 500 }) : Response.json({ default_branch: options.defaultBranch ?? 'main' });
+      }
+      const heads = '/repos/Arcanea-Labs/arcanea-ai-app/git/ref/heads/';
+      if (init.method === 'GET' && path.startsWith(heads)) {
+        return existing.has(path.slice(heads.length)) ? Response.json({ object: { sha: SHA } }) : new Response('{}', { status: 404 });
+      }
+      if (init.method === 'POST' && path.endsWith('/git/refs')) {
+        existing.add((JSON.parse(init.body!) as { ref: string }).ref.slice('refs/heads/'.length));
+        return new Response('{}', { status: 201 });
+      }
       return new Response('{}', { status: 200 });
     };
     return { fetch: createCanonWriteGuard(inner, { owner: 'Arcanea-Labs', repo: 'arcanea-ai-app' }), passed, inits };
   }
 
   const json = (value: unknown) => JSON.stringify(value);
+  const createRef = json({ ref: 'refs/heads/canon/the-glass-orchard', sha: SHA });
+  const pullBody = json({ title: 't', head: 'canon/the-glass-orchard', base: 'main', body: 'b', draft: true });
 
   it.each([
-    ['GET', `${REPO}`, undefined],
-    ['GET', `${REPO}/contents/.arcanea/lore/CANON_LOCKED.md`, undefined],
-    ['HEAD', `${REPO}/git/ref/heads/main`, undefined],
-    ['POST', `${REPO}/git/refs`, json({ ref: 'refs/heads/canon/the-glass-orchard', sha: SHA })],
-    ['PUT', contentsUrl, json(putBody)],
-    ['PUT', `${REPO}/contents/.arcanea/lore/proposals/2026-03-14-the-glass-orchard.md`, json(putBody)],
-    ['POST', `${REPO}/pulls`, json({ title: 't', head: 'canon/the-glass-orchard', base: 'main', body: 'b', draft: true })],
-  ])('lets %s %s through', async (method, url, body) => {
+    ['GET', `${REPO}`],
+    ['GET', `${REPO}/contents/.arcanea/lore/CANON_LOCKED.md`],
+    ['HEAD', `${REPO}/git/ref/heads/main`],
+  ])('lets the read %s %s through', async (method, url) => {
     const g = guarded();
-    await g.fetch(url, { method, headers: {}, ...(body ? { body } : {}) });
+    await g.fetch(url, { method, headers: {} });
     expect(g.passed).toEqual([`${method} ${url}`]);
     expect(g.inits[0]!.redirect).toBe('manual');
+  });
+
+  it('lets the three proposal writes through, after reading the default branch and confirming the new branch is absent', async () => {
+    const g = guarded();
+    const headers = { Authorization: 'Bearer t', 'Content-Type': 'application/json' };
+    await g.fetch(`${REPO}/git/refs`, { method: 'POST', headers, body: createRef });
+    await g.fetch(contentsUrl, { method: 'PUT', headers, body: json(putBody) });
+    await g.fetch(`${REPO}/pulls`, { method: 'POST', headers, body: pullBody });
+    expect(g.passed).toEqual([
+      `GET ${REPO}`,
+      `GET ${REPO}/git/ref/heads/canon/the-glass-orchard`,
+      `POST ${REPO}/git/refs`,
+      `PUT ${contentsUrl}`,
+      `POST ${REPO}/pulls`,
+    ]);
+    expect(g.inits.every((init) => init.redirect === 'manual')).toBe(true);
+    // Its own lookups carry the write's credentials but no body or content type.
+    expect(g.inits[0]).toMatchObject({ method: 'GET', headers: { Authorization: 'Bearer t' } });
+    expect(g.inits[0]!.headers).not.toHaveProperty('Content-Type');
+    expect(g.inits[0]).not.toHaveProperty('body');
+  });
+
+  it('reuses a default branch and a 404 it forwarded instead of asking again', async () => {
+    const g = guarded();
+    await g.fetch(REPO, { method: 'GET', headers: {} });
+    await g.fetch(`${REPO}/git/ref/heads/canon/the-glass-orchard`, { method: 'GET', headers: {} });
+    await g.fetch(`${REPO}/git/refs`, { method: 'POST', headers: {}, body: createRef });
+    expect(g.passed.filter((p) => p.startsWith('GET'))).toHaveLength(2);
+    expect(g.passed.at(-1)).toBe(`POST ${REPO}/git/refs`);
+  });
+
+  describe('branch state (never the default branch, never an existing branch)', () => {
+    it('refuses to create a branch that already exists, without sending the POST', async () => {
+      const g = guarded({ existing: ['canon/the-glass-orchard'] });
+      await expect(g.fetch(`${REPO}/git/refs`, { method: 'POST', headers: {}, body: createRef }))
+        .rejects.toMatchObject({ name: 'CanonGuardError', reason: expect.stringContaining('already exists') });
+      expect(g.passed.some((p) => p.startsWith('POST'))).toBe(false);
+    });
+
+    it('refuses any write that names the real default branch, even a canon/ one', async () => {
+      const g = guarded({ defaultBranch: 'canon/the-glass-orchard' });
+      await expect(g.fetch(`${REPO}/git/refs`, { method: 'POST', headers: {}, body: createRef }))
+        .rejects.toMatchObject({ name: 'CanonGuardError', reason: expect.stringContaining('default branch') });
+      await expect(g.fetch(contentsUrl, { method: 'PUT', headers: {}, body: json(putBody) }))
+        .rejects.toMatchObject({ name: 'CanonGuardError', reason: expect.stringContaining('default branch') });
+      await expect(g.fetch(`${REPO}/pulls`, { method: 'POST', headers: {}, body: pullBody }))
+        .rejects.toMatchObject({ name: 'CanonGuardError', reason: expect.stringContaining('default branch') });
+      expect(g.passed.every((p) => p.startsWith('GET'))).toBe(true);
+    });
+
+    it('refuses to write a file to a canon/ branch this guard did not create', async () => {
+      const g = guarded({ existing: ['canon/the-glass-orchard'] });
+      await expect(g.fetch(contentsUrl, { method: 'PUT', headers: {}, body: json(putBody) }))
+        .rejects.toMatchObject({ name: 'CanonGuardError', reason: expect.stringContaining('did not create') });
+      expect(g.passed.some((p) => p.startsWith('PUT'))).toBe(false);
+    });
+
+    it('refuses a PR from a canon/ branch this guard did not create', async () => {
+      const g = guarded({ existing: ['canon/the-glass-orchard'] });
+      await expect(g.fetch(`${REPO}/pulls`, { method: 'POST', headers: {}, body: pullBody }))
+        .rejects.toMatchObject({ name: 'CanonGuardError', reason: expect.stringContaining('did not create') });
+      expect(g.passed.some((p) => p.startsWith('POST'))).toBe(false);
+    });
+
+    it('refuses to write when the default branch cannot be read', async () => {
+      const g = guarded({ defaultBranch: null });
+      await expect(g.fetch(`${REPO}/git/refs`, { method: 'POST', headers: {}, body: createRef }))
+        .rejects.toMatchObject({ name: 'CanonGuardError', reason: expect.stringContaining('default branch') });
+      expect(g.passed).toEqual([`GET ${REPO}`]);
+    });
+
+    it('does not count a failed ref creation as created', async () => {
+      const passed: string[] = [];
+      const inner = async (url: string, init: CanonFetchInit) => {
+        passed.push(`${init.method} ${url}`);
+        if (init.method === 'GET' && new URL(url).pathname.endsWith('/arcanea-ai-app')) return Response.json({ default_branch: 'main' });
+        if (init.method === 'GET') return new Response('{}', { status: 404 });
+        return Response.json({ message: 'Reference already exists' }, { status: 422 });
+      };
+      const guard = createCanonWriteGuard(inner, { owner: 'Arcanea-Labs', repo: 'arcanea-ai-app' });
+      await guard(`${REPO}/git/refs`, { method: 'POST', headers: {}, body: createRef });
+      await expect(guard(contentsUrl, { method: 'PUT', headers: {}, body: json(putBody) }))
+        .rejects.toMatchObject({ name: 'CanonGuardError', reason: expect.stringContaining('did not create') });
+    });
   });
 
   it('needs a valid owner and repo to pin', () => {
@@ -244,7 +345,8 @@ describe('layer 3: existence pre-check', () => {
     const gh = github(200);
     await expect(openCanonPr(build({}), { owner: 'o', repo: 'r', base: 'main', getToken: () => 'tok', fetch: gh.fetch }))
       .rejects.toMatchObject({ name: 'CanonPrError', code: 'FILE_EXISTS' });
-    expect(gh.calls.map((c) => c.method)).toEqual(['GET', 'POST', 'GET']);
+    expect(gh.calls.filter((c) => c.method !== 'GET').map((c) => c.method)).toEqual(['POST']);
+    expect(gh.calls.at(-1)!.url).toContain('/contents/');
     expect(gh.calls.some((c) => c.method === 'PUT')).toBe(false);
   });
 });

@@ -8,7 +8,7 @@ import {
   REPO_PATTERN,
   type FetchLike,
 } from './guard.js';
-import type { CanonProposalFile } from './proposal.js';
+import { isBuiltCanonProposal, type CanonProposalFile } from './proposal.js';
 
 export type { ExecutedCall } from './errors.js';
 
@@ -57,6 +57,8 @@ export interface OpenCanonPrResult {
   branch: string;
   path: string;
   calls: ExecutedCall[];
+  /** True when an open PR from this proposal's branch already existed and was returned; nothing was written. */
+  reused: boolean;
 }
 
 /** Base64 of the UTF-8 bytes of `text`. No Buffer, so it runs in Workers. */
@@ -96,12 +98,15 @@ function snapshotTarget(target: CanonPrTarget): CanonPrTarget {
 }
 
 /**
- * Copies the proposal and checks the copy. Layer 1 runs here, before any token
- * is fetched or request is sent, and the copy is what every request is built from.
+ * Accepts only an object buildCanonProposal returned (frozen, so its fields
+ * are what the builder rendered and sanitized), then re-checks it. Layer 1
+ * runs here, before any token is fetched or request is sent.
  */
 function snapshotProposal(proposal: CanonProposalFile): CanonProposalFile {
-  const { slug, date, path, branch, markdown, commitMessage, prTitle, prBody } = proposal ?? ({} as CanonProposalFile);
-  const copy: CanonProposalFile = { slug, date, path, branch, markdown, commitMessage, prTitle, prBody };
+  if (!isBuiltCanonProposal(proposal)) {
+    invalid('proposal must be the unmodified object returned by buildCanonProposal; hand-made or copied proposals are refused.');
+  }
+  const copy = proposal;
   assertProposalPathAllowed(copy.path);
   if (typeof copy.branch !== 'string' || !CANON_BRANCH_PATTERN.test(copy.branch) || copy.branch !== `canon/${copy.slug}`) {
     invalid('proposal branch must be canon/<slug>.');
@@ -110,7 +115,7 @@ function snapshotProposal(proposal: CanonProposalFile): CanonProposalFile {
   for (const key of ['markdown', 'commitMessage', 'prTitle', 'prBody'] as const) {
     if (typeof copy[key] !== 'string' || copy[key].length === 0) invalid(`proposal.${key} must be a non-empty string.`);
   }
-  return Object.freeze(copy);
+  return copy;
 }
 
 function callFor(
@@ -126,6 +131,22 @@ function callFor(
   switch (step) {
     case 'get-repo':
       return { step, method: 'GET', path: repoPath, body: null, purpose: 'Look up the default branch to use as base.' };
+    case 'find-pr':
+      return {
+        step,
+        method: 'GET',
+        path: `${repoPath}/pulls?state=open&head=${encodeURIComponent(`${target.owner}:${proposal.branch}`)}&per_page=100`,
+        body: null,
+        purpose: `Look for an open PR from ${proposal.branch}; if one exists it is returned and nothing is written.`,
+      };
+    case 'check-branch':
+      return {
+        step,
+        method: 'GET',
+        path: `${repoPath}/git/ref/heads/${encodePath(proposal.branch)}`,
+        body: null,
+        purpose: `Confirm ${proposal.branch} does not exist yet (must be 404); an existing branch is never written.`,
+      };
     case 'get-base-ref':
       return {
         step,
@@ -179,8 +200,8 @@ export function planCanonPr(proposal: CanonProposalFile, target: CanonPrTarget):
   const fixed = snapshotProposal(proposal);
   const base = pinned.base ?? null;
   const steps: PlannedCall['step'][] = base === null
-    ? ['get-repo', 'get-base-ref', 'create-branch', 'check-file', 'put-file', 'open-pr']
-    : ['get-base-ref', 'create-branch', 'check-file', 'put-file', 'open-pr'];
+    ? ['get-repo', 'find-pr', 'check-branch', 'get-base-ref', 'create-branch', 'check-file', 'put-file', 'open-pr']
+    : ['find-pr', 'check-branch', 'get-base-ref', 'create-branch', 'check-file', 'put-file', 'open-pr'];
   return steps.map((step) => callFor(step, fixed, pinned, base, null));
 }
 
@@ -188,8 +209,13 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
+const RETRY_NOTE = 'Retrying openCanonPr with the same proposal is safe: it first looks for an open PR from this branch and returns it, and never opens a second one.';
+
 /**
- * Executes the plan: branch, existence check, new file, draft PR. The token
+ * Executes the plan. It is idempotent per proposal: it first looks for an open
+ * PR from the proposal's branch and returns it (reused: true) without writing,
+ * and stops with BRANCH_EXISTS if the branch exists without an open PR. Only
+ * then: branch, existence check, new file, draft PR. The token
  * comes only from `getToken`, is used only in the Authorization header, and is
  * redacted from every error message. Every request passes the write guard,
  * which pins api.github.com and /repos/{owner}/{repo}. Redirects are never
@@ -233,7 +259,7 @@ export async function openCanonPr(proposal: CanonProposalFile, options: OpenCano
   };
   const calls: ExecutedCall[] = [];
 
-  const send = async (call: PlannedCall): Promise<{ status: number; data: Record<string, unknown> }> => {
+  const send = async (call: PlannedCall): Promise<{ status: number; data: Record<string, unknown>; raw: unknown }> => {
     let response;
     try {
       response = await guardedFetch(`${GITHUB_API_ORIGIN}${call.path}`, {
@@ -261,13 +287,13 @@ export async function openCanonPr(proposal: CanonProposalFile, options: OpenCano
         { status },
       );
     }
-    let data: Record<string, unknown> = {};
+    let raw: unknown;
     try {
-      data = asRecord(JSON.parse(await response.text()));
+      raw = JSON.parse(await response.text());
     } catch {
       // Empty or non-JSON body; status alone decides.
     }
-    return { status, data };
+    return { status, data: asRecord(raw), raw };
   };
 
   const httpError = (
@@ -293,6 +319,40 @@ export async function openCanonPr(proposal: CanonProposalFile, options: OpenCano
     base = res.data.default_branch;
   }
 
+  const expectedPrUrl = (prNumber: number) => `https://github.com/${target.owner}/${target.repo}/pull/${prNumber}`;
+  // GitHub may return the canonical casing of owner and repo.
+  const isExpectedPrUrl = (prUrl: unknown, prNumber: number): prUrl is string =>
+    typeof prUrl === 'string' && prUrl.toLowerCase() === expectedPrUrl(prNumber).toLowerCase();
+
+  // Idempotency: the branch is fixed per proposal (per row id when built from a
+  // row), so an earlier run's PR is found here and returned instead of a second one.
+  const found = await send(callFor('find-pr', fixed, target, base, null));
+  if (!ok(found.status)) httpError('find-pr', found.status, found.data);
+  if (!Array.isArray(found.raw)) throw new CanonPrError('INVALID_RESPONSE', 'find-pr', 'GitHub did not return a list of pull requests.');
+  const fullName = `${target.owner}/${target.repo}`.toLowerCase();
+  for (const item of found.raw) {
+    const pr = asRecord(item);
+    const head = asRecord(pr.head);
+    const headRepo = asRecord(head.repo);
+    if (head.ref !== fixed.branch || typeof headRepo.full_name !== 'string' || headRepo.full_name.toLowerCase() !== fullName) continue;
+    const prNumber = pr.number;
+    if (typeof prNumber !== 'number' || !Number.isSafeInteger(prNumber) || prNumber <= 0 || !isExpectedPrUrl(pr.html_url, prNumber)) {
+      throw new CanonPrError('INVALID_RESPONSE', 'find-pr', `GitHub listed an open PR from ${fixed.branch} without a valid number and URL.`);
+    }
+    return { prUrl: pr.html_url as string, prNumber, branch: fixed.branch, path: fixed.path, calls, reused: true };
+  }
+
+  const branchRef = await send(callFor('check-branch', fixed, target, base, null));
+  if (ok(branchRef.status)) {
+    throw new CanonPrError(
+      'BRANCH_EXISTS',
+      'check-branch',
+      `Branch ${fixed.branch} already exists but has no open PR (an earlier run may have stopped part way, or its PR was closed). Nothing was written; existing branches are never reused. Inspect the branch, then delete it or open its PR by hand.`,
+      { status: branchRef.status, branch: fixed.branch, path: fixed.path, calls: [...calls] },
+    );
+  }
+  if (branchRef.status !== 404) httpError('check-branch', branchRef.status, branchRef.data);
+
   const ref = await send(callFor('get-base-ref', fixed, target, base, null));
   if (!ok(ref.status)) httpError('get-base-ref', ref.status, ref.data);
   const sha = asRecord(ref.data.object).sha;
@@ -309,19 +369,24 @@ export async function openCanonPr(proposal: CanonProposalFile, options: OpenCano
       throw new CanonPrError(
         error.code,
         error.step,
-        `${error.message} Branch ${fixed.branch} may have been created anyway; it is never reused. Check for it and retry with a different slug.`,
+        `${error.message} Branch ${fixed.branch} may have been created anyway. ${RETRY_NOTE}`,
         { branch: fixed.branch, path: fixed.path, calls: [...calls] },
       );
     }
     throw error;
   }
   if (created.status === 422) {
-    httpError('create-branch', 422, created.data, 'BRANCH_EXISTS', `. Branch ${fixed.branch} already exists; it is never reused. Pick another slug.`);
+    // GitHub answers 422 both for an existing ref and for a ref or sha it will not accept.
+    const message = typeof created.data.message === 'string' ? created.data.message : '';
+    if (/already exists/i.test(message)) {
+      httpError('create-branch', 422, created.data, 'BRANCH_EXISTS', `. Branch ${fixed.branch} already exists (created since the check); it is never reused. ${RETRY_NOTE}`);
+    }
+    httpError('create-branch', 422, created.data, 'BRANCH_REF_INVALID', `. GitHub refused to create ${fixed.branch} from ${base} at ${sha}; no branch was created.`);
   }
   if (created.status >= 500) {
     // A server error does not prove the ref was not created.
     httpError('create-branch', created.status, created.data, 'HTTP_ERROR',
-      `. Branch ${fixed.branch} may have been created anyway; it is never reused. Check for it and retry with a different slug.`,
+      `. Branch ${fixed.branch} may have been created anyway. ${RETRY_NOTE}`,
       { branch: fixed.branch, path: fixed.path, calls: [...calls] });
   }
   if (!ok(created.status)) httpError('create-branch', created.status, created.data);
@@ -343,12 +408,10 @@ export async function openCanonPr(proposal: CanonProposalFile, options: OpenCano
     if (typeof prNumber !== 'number' || !Number.isSafeInteger(prNumber) || prNumber <= 0) {
       throw new CanonPrError('INVALID_RESPONSE', 'open-pr', 'GitHub did not return a pull request number.');
     }
-    // GitHub may return the canonical casing of owner and repo.
-    const expectedUrl = `https://github.com/${target.owner}/${target.repo}/pull/${prNumber}`;
-    if (typeof prUrl !== 'string' || prUrl.toLowerCase() !== expectedUrl.toLowerCase()) {
-      throw new CanonPrError('INVALID_RESPONSE', 'open-pr', `GitHub returned a pull request URL that is not ${expectedUrl}.`);
+    if (!isExpectedPrUrl(prUrl, prNumber)) {
+      throw new CanonPrError('INVALID_RESPONSE', 'open-pr', `GitHub returned a pull request URL that is not ${expectedPrUrl(prNumber)}.`);
     }
-    return { prUrl, prNumber, branch: fixed.branch, path: fixed.path, calls };
+    return { prUrl, prNumber, branch: fixed.branch, path: fixed.path, calls, reused: false };
   } catch (error) {
     if (error instanceof CanonGuardError) {
       // Still a guard refusal; it only gains the leftover branch.
@@ -362,7 +425,7 @@ export async function openCanonPr(proposal: CanonProposalFile, options: OpenCano
     throw new CanonPrError(
       error.code,
       error.step,
-      `${error.message} Branch ${fixed.branch} was left in place and is not reused; retry with a different slug.`,
+      `${error.message} Branch ${fixed.branch} was left in place and is never written again. A retry with the same proposal returns the PR if one was opened, and otherwise stops at the existing branch without writing.`,
       { status: error.status, githubMessage: error.githubMessage, branch: fixed.branch, path: fixed.path, calls: [...calls] },
     );
   }

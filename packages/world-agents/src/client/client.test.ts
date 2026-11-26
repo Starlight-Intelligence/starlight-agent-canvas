@@ -95,6 +95,7 @@ const report = {
   dispositions: { node: 1, merged: 0, expanded: 0, edge: 0, region: 0, skipped: 0 },
   needsReupload: 0,
   skipped: [],
+  truncated: [],
   warnings: [],
 };
 
@@ -449,16 +450,66 @@ describe('outputs match L2', () => {
   });
 });
 
-describe('canon gate', () => {
-  it('add_node cannot carry canon status "canon"', async () => {
-    await rejectsInput('addNode', {
-      node: { kind: 'god', title: 'Nero', position: { x: 0, y: 0 }, canon: { status: 'canon', ref: 'https://example.com/pr/1' } },
-    });
+describe('import_whiteboard result checks', () => {
+  const written = { ok: true, version: 1, seq: 1, report };
+  const dry = { ok: true, dryRun: true, report };
+
+  it('refuses a write result for a dry-run request', async () => {
+    const { transport } = mockTransport(written);
+    await expect(createWorldClient({ transport, worldId: 'board' }).importWhiteboard({ whiteboard, dryRun: true }))
+      .rejects.toMatchObject({ name: 'WorldClientValidationError', direction: 'output', message: expect.stringContaining('dry run') });
   });
 
+  it.each([[undefined], [false]])('refuses a dry-run result for a write request (dryRun %s)', async (dryRun) => {
+    const { transport } = mockTransport(dry);
+    await expect(createWorldClient({ transport, worldId: 'board' }).importWhiteboard({ whiteboard, ...(dryRun === undefined ? {} : { dryRun }) }))
+      .rejects.toMatchObject({ name: 'WorldClientValidationError', direction: 'output', message: expect.stringContaining('nothing was imported') });
+  });
+
+  it('refuses a result that claims both a dry run and a write', async () => {
+    const { transport } = mockTransport({ ...written, dryRun: true });
+    await expect(createWorldClient({ transport, worldId: 'board' }).importWhiteboard({ whiteboard, dryRun: true }))
+      .rejects.toBeInstanceOf(WorldClientValidationError);
+  });
+
+  it.each([
+    ['any object', { anything: 1 }],
+    ['an empty object', {}],
+    ['a report missing dispositions', (() => { const { dispositions: _d, ...rest } = report; return rest; })()],
+    ['a report with a string count', { ...report, nodesOut: '1' }],
+    ['a report with a negative count', { ...report, elementsIn: -1 }],
+    ['a report with a bad truncation field', { ...report, truncated: [{ nodeId: 'n', elementIds: [], field: 'canon', originalLength: 1, keptLength: 0, fullTextIn: null }] }],
+  ])('refuses %s as the report', async (_label, bad) => {
+    for (const [payload, dryRun] of [[{ ...written, report: bad }, false], [{ ...dry, report: bad }, true]] as const) {
+      const { transport } = mockTransport(payload);
+      await expect(createWorldClient({ transport, worldId: 'board' }).importWhiteboard({ whiteboard, dryRun }))
+        .rejects.toMatchObject({ name: 'WorldClientValidationError', direction: 'output' });
+    }
+  });
+
+  it('accepts a full L1 ImportReport', async () => {
+    const full = { ...report, source: { title: 'Board', format: 'claude.whiteboard', exportedAt: '2026-11-25T00:00:00Z' }, skipped: [{ elementId: 'e1', reason: 'empty' }], truncated: [{ nodeId: 'n1', elementIds: ['e2'], field: 'title', originalLength: 400, keptLength: 300, fullTextIn: 'body' }], warnings: ['w'] };
+    const { transport } = mockTransport({ ...written, report: full });
+    await expect(createWorldClient({ transport, worldId: 'board' }).importWhiteboard({ whiteboard })).resolves.toMatchObject({ version: 1, report: full });
+  });
+});
+
+describe('canon gate', () => {
   it('add_node cannot carry canon status "proposed" either (propose_canon records the proposal)', async () => {
     await rejectsInput('addNode', {
       node: { kind: 'god', title: 'Nero', position: { x: 0, y: 0 }, canon: { status: 'proposed' } },
+    });
+  });
+
+  it('add_node cannot carry any canon field, even draft', async () => {
+    await rejectsInput('addNode', {
+      node: { kind: 'god', title: 'Nero', position: { x: 0, y: 0 }, canon: { status: 'draft' } },
+    });
+  });
+
+  it('add_node cannot carry canon status "canon"', async () => {
+    await rejectsInput('addNode', {
+      node: { kind: 'god', title: 'Nero', position: { x: 0, y: 0 }, canon: { status: 'canon', ref: 'https://example.com/pr/1' } },
     });
   });
 

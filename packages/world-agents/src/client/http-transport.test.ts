@@ -246,6 +246,43 @@ describe('HttpMcpTransport responses', () => {
     expect(error.message).toContain('Region r_x not found');
   });
 
+  describe('malformed envelopes are protocol errors, never success', () => {
+    const ok = { structuredContent: { ok: true, version: 1 } };
+    it.each([
+      ['both result and error', (id: number) => json({ jsonrpc: '2.0', id, result: ok, error: { code: -32000, message: 'boom' } })],
+      ['an error without a numeric code', (id: number) => json({ jsonrpc: '2.0', id, error: { message: 'boom' } })],
+      ['an error without a string message', (id: number) => json({ jsonrpc: '2.0', id, error: { code: -32000 } })],
+      ['an error that is not an object', (id: number) => json({ jsonrpc: '2.0', id, error: 'boom' })],
+      ['both, over SSE', (id: number) => sse(`data: ${JSON.stringify({ jsonrpc: '2.0', id, result: ok, error: { code: 1, message: 'x' } })}\n\n`)],
+    ])('rejects %s', async (_label, reply) => {
+      const server = fakeServer((s) => reply(s.body.id!));
+      const error = await transport(server.fetch).callTool('get_world', {}).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(WorldTransportError);
+      expect(error).not.toBeInstanceOf(WorldToolError);
+    });
+
+    it.each([
+      ['the string "true"', 'true'],
+      ['the string "false"', 'false'],
+      ['1', 1],
+      ['0', 0],
+      ['null', null],
+      ['an object', {}],
+    ])('rejects isError as %s instead of treating it as success', async (_label, isError) => {
+      const server = fakeServer((s) => toolResult(s.body.id!, { isError, ...ok }));
+      const error = await transport(server.fetch).callTool('get_world', {}).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(WorldTransportError);
+      expect((error as Error).message).toContain('isError');
+    });
+
+    it('still accepts isError false or absent', async () => {
+      for (const extra of [{ isError: false }, {}]) {
+        const server = fakeServer((s) => toolResult(s.body.id!, { ...extra, ...ok }));
+        await expect(transport(server.fetch).callTool('get_world', {})).resolves.toEqual({ ok: true, version: 1 });
+      }
+    });
+  });
+
   it('maps a JSON-RPC error to a WorldToolError', async () => {
     const server = fakeServer((s) => json({ jsonrpc: '2.0', id: s.body.id, error: { code: -32602, message: 'Invalid params' } }));
     const error = await transport(server.fetch).callTool('search', {}).catch((e: unknown) => e) as WorldToolError;

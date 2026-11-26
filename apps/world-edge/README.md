@@ -184,7 +184,7 @@ Use `harness` values `claude`, `codex` and `chatgpt` (lowercase slugs, see the s
 
 The MCP URL is `https://world-edge.<account>.workers.dev/mcp`.
 
-- Claude Code: `claude mcp add --transport http starlight-world https://world-edge.<account>.workers.dev/mcp --header "Authorization: Bearer <claude token>"`
+- Claude Code: do not use `claude mcp add ... --header "Authorization: Bearer <token>"`; it writes the token in plain text to `~/.claude.json` (or `.mcp.json`). Add the server to `.mcp.json` with only the variable name, `"headers": { "Authorization": "Bearer ${WORLD_CANVAS_TOKEN}" }` and `"type": "http"`, and export `WORLD_CANVAS_TOKEN` per session from an OS secret store or a password manager CLI (for example `op run`). See [docs/world-canvas/connect-agents.md](../../docs/world-canvas/connect-agents.md) for the full config.
 - Codex: in `~/.codex/config.toml`, add `[mcp_servers.starlight-world]` with `url = "https://world-edge.<account>.workers.dev/mcp"` and the Codex token as a bearer token read from an environment variable. The exact key for that has changed between Codex releases, so check the Codex MCP config docs for the installed version (this lane did not verify it).
 - ChatGPT: custom connectors for remote MCP expect OAuth. A static bearer token is not enough there. Options: put the Worker behind Access with an OAuth-capable identity provider and use the Agents SDK `OAuthProvider` pattern (`@cloudflare/workers-oauth-provider`), or run ChatGPT through a bridge that injects the token. This is not built in this lane; see "Not done" in the PR.
 

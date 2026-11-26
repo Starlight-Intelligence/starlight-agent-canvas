@@ -27,7 +27,18 @@ How L2 authenticates, from `apps/world-edge/src/auth.ts` and its README at 161c0
 | `WORLD_CANVAS_TOKEN` | Env var holding this client's service token (L2's README generates it with `openssl rand -hex 32` and stores only its hash). Use a different token per client and per person. Never commit its value. |
 | `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET` | Env vars holding a Cloudflare Access service token, needed only if the Access policy on `/mcp` is Service Auth rather than Bypass (not recommended until L2 fixes the attribution gap above). |
 
-Set the variables in the shell (or IDE process) that launches the agent, for example with `direnv` or your shell profile. Do not put the values in any file that is committed.
+Configs name only the variables (`${WORLD_CANVAS_TOKEN}`, `bearer_token_env_var = "WORLD_CANVAS_TOKEN"`); the token itself never goes in a config file. Keep the token in an OS secret store or a password manager and export it only into the session that launches the agent, for example:
+
+```bash
+# macOS Keychain (store once with: security add-generic-password -a "$USER" -s world-canvas-token -w)
+export WORLD_CANVAS_TOKEN="$(security find-generic-password -a "$USER" -s world-canvas-token -w)"
+# Linux Secret Service (store once with: secret-tool store --label='World Canvas token' service world-canvas)
+export WORLD_CANVAS_TOKEN="$(secret-tool lookup service world-canvas)"
+# 1Password CLI: run the agent with the secret resolved for that process only
+WORLD_CANVAS_TOKEN="op://<vault>/world-canvas/token" op run -- claude
+```
+
+On Windows, read it from Credential Manager or your password manager's CLI (for example `op run`) the same way. Do not write the token in plain text to disk: not in `.envrc` (direnv), `.env` files, shell profiles (`~/.bashrc`, `~/.zshrc`, `~/.profile`), `.mcp.json`, `~/.claude.json` or `~/.codex/config.toml`, committed or not. Plain-text dotfiles get synced, backed up, read by other tools and pasted into bug reports. If a token was ever stored that way, rotate it (L2's README: make a new token and replace its hash in `MCP_SERVICE_TOKENS`).
 
 About the Cloudflare Access headers: Cloudflare Access accepts a service token sent as the `CF-Access-Client-Id` and `CF-Access-Client-Secret` request headers when the Access application has a Service Auth policy. Neither Anthropic nor OpenAI documents Cloudflare Access, so the header examples below are our design, not vendor guidance. With an Access Bypass rule on `/mcp` (L2's README option), leave those two headers out; the examples below show them as an optional variant.
 
@@ -76,7 +87,7 @@ claude mcp add-json --scope project starlight-world \
   '{"type":"http","url":"https://world-edge.<account>.workers.dev/mcp","headers":{"Authorization":"Bearer ${WORLD_CANVAS_TOKEN}"}}'
 ```
 
-Single quotes stop your shell from expanding the variable. Whether the Claude Code CLI then stores the `${WORLD_CANVAS_TOKEN}` text unexpanded is not stated in the docs and we could not test it (unverified), so the safest path is to edit `.mcp.json` by hand and then check the file. L2's README shows `claude mcp add --transport http starlight-world <url> --header "Authorization: Bearer <claude token>"`; that works but stores the token in plain text in `~/.claude.json`. Never run `claude mcp add --transport http ... --header "Authorization: Bearer $WORLD_CANVAS_TOKEN"` with double quotes in any scope: the shell expands the variable first and the token is written in plain text, into `.mcp.json` for `project` scope or `~/.claude.json` for `local` and `user` scope.
+Single quotes stop your shell from expanding the variable. Whether the Claude Code CLI then stores the `${WORLD_CANVAS_TOKEN}` text unexpanded is not stated in the docs and we could not test it (unverified), so the safest path is to edit `.mcp.json` by hand and then check the file. `claude mcp add --transport http starlight-world <url> --header "Authorization: Bearer <claude token>"` works but stores the token in plain text in `~/.claude.json`, so L2's README no longer suggests it. Never run `claude mcp add --transport http ... --header "Authorization: Bearer $WORLD_CANVAS_TOKEN"` with double quotes in any scope: the shell expands the variable first and the token is written in plain text, into `.mcp.json` for `project` scope or `~/.claude.json` for `local` and `user` scope.
 
 Scopes: `local` (default, this project, stored in `~/.claude.json`), `project` (shared, stored in `.mcp.json`), `user` (all your projects, stored in `~/.claude.json`).
 
