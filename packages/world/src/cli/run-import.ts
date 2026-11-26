@@ -1,5 +1,6 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { mkdir, open, readFile, rename, unlink } from 'node:fs/promises';
+import { basename, dirname, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { importClaudeWhiteboard, type ImportLexicon } from '../import/claude-whiteboard.js';
 import { findPathOverlaps } from './paths.js';
@@ -100,8 +101,19 @@ function parse(argv: string[]) {
 }
 
 async function writeAtomic(path: string, content: string): Promise<void> {
-  await mkdir(dirname(path), { recursive: true });
-  const temp = `${path}.${process.pid}.tmp`;
-  await writeFile(temp, content, 'utf8');
-  await rename(temp, path);
+  const dir = dirname(path);
+  await mkdir(dir, { recursive: true });
+  // Unpredictable name, created exclusively ('wx'): never truncates or follows
+  // an existing file or symlink at the temp path.
+  const temp = join(dir, `.${basename(path)}.${randomUUID()}.tmp`);
+  const handle = await open(temp, 'wx', 0o644);
+  try {
+    await handle.writeFile(content, 'utf8');
+    await handle.close();
+    await rename(temp, path);
+  } catch (error) {
+    await handle.close().catch(() => undefined);
+    await unlink(temp).catch(() => undefined);
+    throw error;
+  }
 }
