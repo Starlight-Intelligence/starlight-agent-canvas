@@ -21,6 +21,17 @@ export type Principal = {
   harness: string;
   /** Stable id: Access identity email (browser or OAuth sign-in), or the service token name. */
   actor: string;
+  /**
+   * Epoch ms after which this credential is no longer valid (Access `exp`).
+   * Long-lived connections (WebSockets) must stop serving the principal then.
+   */
+  expiresAt?: number;
+  /**
+   * SHA-256 of the presented service token. Lets a long-lived connection
+   * re-check that the token is still listed in MCP_SERVICE_TOKENS (revocation).
+   * The hash never leaves the Worker and its Durable Objects.
+   */
+  tokenSha256?: string;
 } & (
   | { via: 'access' | 'service-token' }
   /** An OAuth access token this Worker issued. `scopes` are the granted scopes the provider verified. */
@@ -75,21 +86,49 @@ function timingSafeEqualHex(a: string, b: string): boolean {
   return diff === 0;
 }
 
-export async function verifyServiceToken(token: string, env: Pick<Env, 'MCP_SERVICE_TOKENS'>): Promise<Principal | null> {
-  if (!env.MCP_SERVICE_TOKENS || token.length < 16 || token.length > 512) return null;
-  let entries: z.infer<typeof serviceTokensSchema>;
+function parseServiceTokens(env: Pick<Env, 'MCP_SERVICE_TOKENS'>): z.infer<typeof serviceTokensSchema> | null {
+  if (!env.MCP_SERVICE_TOKENS) return null;
   try {
-    entries = serviceTokensSchema.parse(JSON.parse(env.MCP_SERVICE_TOKENS));
+    return serviceTokensSchema.parse(JSON.parse(env.MCP_SERVICE_TOKENS));
   } catch {
     // Misconfigured secret: fail closed. Do not echo the secret.
     return null;
   }
-  const presented = await sha256Hex(token);
+}
+
+function matchTokenHash(presented: string, entries: z.infer<typeof serviceTokensSchema>) {
   let match: (typeof entries)[number] | null = null;
   for (const entry of entries) {
     if (timingSafeEqualHex(presented, entry.sha256)) match = entry;
   }
-  return match ? { harness: match.harness, actor: match.name, via: 'service-token' } : null;
+  return match;
+}
+
+export async function verifyServiceToken(token: string, env: Pick<Env, 'MCP_SERVICE_TOKENS'>): Promise<Principal | null> {
+  if (token.length < 16 || token.length > 512) return null;
+  const entries = parseServiceTokens(env);
+  if (!entries) return null;
+  const presented = await sha256Hex(token);
+  const match = matchTokenHash(presented, entries);
+  return match ? { harness: match.harness, actor: match.name, via: 'service-token', tokenSha256: presented } : null;
+}
+
+/**
+ * Is `principal` still authorized right now? Every principal expires at its
+ * expiresAt; service-token principals must also still be listed, under the
+ * same name and harness, in the current MCP_SERVICE_TOKENS. Used by
+ * long-lived WebSocket connections, which only carry access and
+ * service-token principals (OAuth principals stay on per-request /mcp).
+ */
+export function principalStillValid(principal: Principal, env: Pick<Env, 'MCP_SERVICE_TOKENS'>, now = Date.now()): boolean {
+  if (principal.expiresAt !== undefined && now >= principal.expiresAt) return false;
+  if (principal.via === 'service-token') {
+    if (!principal.tokenSha256) return false;
+    const entries = parseServiceTokens(env);
+    const match = entries ? matchTokenHash(principal.tokenSha256, entries) : null;
+    return Boolean(match && match.name === principal.actor && match.harness === principal.harness);
+  }
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -285,7 +324,7 @@ export async function verifyAccessJwt(
   if (payload.common_name !== undefined || typeof payload.email !== 'string' || payload.email.trim().length === 0) {
     throw new AuthError('Access service-token assertions are not accepted; use a bearer token.');
   }
-  return { harness: 'human', actor: payload.email, via: 'access' };
+  return { harness: 'human', actor: payload.email, via: 'access', expiresAt: (payload.exp as number) * 1000 };
 }
 
 async function bearerPrincipal(request: Request, env: Env): Promise<Principal | null> {
@@ -339,7 +378,12 @@ export function encodePrincipal(principal: Principal): string {
   return JSON.stringify(principal);
 }
 
-const principalBase = { harness: harnessSchema, actor: z.string().min(1).max(200) };
+const principalBase = {
+  harness: harnessSchema,
+  actor: z.string().min(1).max(200),
+  expiresAt: z.number().int().positive().optional(),
+  tokenSha256: z.string().regex(/^[0-9a-f]{64}$/).optional(),
+};
 const principalSchema = z.discriminatedUnion('via', [
   z.object({ ...principalBase, via: z.enum(['access', 'service-token']) }),
   z.object({ ...principalBase, via: z.literal('oauth'), scopes: z.array(z.enum(WORLD_SCOPES)).max(WORLD_SCOPES.length) }),

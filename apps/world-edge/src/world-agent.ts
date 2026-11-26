@@ -19,7 +19,7 @@ import {
   type WorldNode,
 } from '@starlight-agent-canvas/world';
 import { z } from 'zod';
-import { decodePrincipal, PRINCIPAL_HEADER, type Principal } from './auth.js';
+import { decodePrincipal, principalStillValid, PRINCIPAL_HEADER, type Principal } from './auth.js';
 import type { Env } from './env.js';
 import { syncIndex, toHit, type SearchHit } from './indexing.js';
 import { LAYOUT_STRATEGIES, layoutNodes, type LayoutStrategy } from './layout.js';
@@ -37,6 +37,14 @@ import {
   toCard,
 } from './region.js';
 import { WorldStore, type CanonProposalRow, type OpsLogEntry } from './store.js';
+
+/** Most nodes one layout_region call lays out; larger regions report truncated: true. */
+export const LAYOUT_MAX_NODES = 1000;
+/** Retry backoff for failed index jobs: 5 s doubling, capped at one hour. */
+const INDEX_RETRY_BASE_SECONDS = 5;
+const INDEX_RETRY_MAX_SECONDS = 3600;
+/** WebSocket close code for an expired or revoked credential. */
+export const WS_UNAUTHORIZED = 4401;
 
 /**
  * Small, synced Agent state. Never holds the graph: a 100k-node world cannot
@@ -146,6 +154,9 @@ export class WorldAgent extends Agent<Env, WorldSummaryState> {
    * slow job for an older batch could overwrite rows a newer batch wrote.
    */
   #indexQueue: Promise<void> = Promise.resolve();
+  #retryScheduled = false;
+  /** Index writer. A field so tests can simulate an index outage. */
+  indexSync: typeof syncIndex = syncIndex;
 
   private get store(): WorldStore {
     if (!this.#store) {
@@ -162,7 +173,7 @@ export class WorldAgent extends Agent<Env, WorldSummaryState> {
 
   getWorldInfo(): { world: World; counts: ReturnType<WorldStore['counts']>; openProposals: number } {
     const store = this.store;
-    return { world: store.getWorld(), counts: store.counts(), openProposals: store.listProposals('open').length };
+    return { world: store.getWorld(), counts: store.counts(), openProposals: store.countProposals('open') };
   }
 
   getRegion(input: unknown): RegionResult {
@@ -197,7 +208,7 @@ export class WorldAgent extends Agent<Env, WorldSummaryState> {
         level,
         bounds,
         regions: world.regions,
-        clusters: summarizeClusters(store.tileCounts(tiles, { regionId: regionFilter, kinds: query.kinds })),
+        clusters: summarizeClusters(store.tileCounts(tiles, bounds, { regionId: regionFilter, kinds: query.kinds })),
         nodes: [],
         edges: [],
         truncated: false,
@@ -240,8 +251,24 @@ export class WorldAgent extends Agent<Env, WorldSummaryState> {
     return this.store.listOps({ afterSeq, limit: Math.min(Math.max(1, limit), MAX_LOG_PAGE) });
   }
 
-  listProposals(status?: string): CanonProposalRow[] {
-    return this.store.listProposals(status);
+  /** One page of canon proposals; pass the returned nextCursor for the next page. */
+  listProposals(options: { status?: string; limit?: number; cursor?: string } = {}): { proposals: CanonProposalRow[]; nextCursor: string | null } {
+    return this.store.listProposals(options);
+  }
+
+  /** Index sync jobs not yet applied to D1/Vectorize. */
+  pendingIndexJobs(): number {
+    return this.store.countIndexJobs();
+  }
+
+  /**
+   * Run pending index jobs in order (alarm callback, also safe to call any
+   * time). Returns how many are still pending.
+   */
+  async retryIndexJobs(): Promise<number> {
+    this.#retryScheduled = false;
+    await this.#kickIndex();
+    return this.store.countIndexJobs();
   }
 
   // ------------------------------------------------------------- writes ----
@@ -291,21 +318,34 @@ export class WorldAgent extends Agent<Env, WorldSummaryState> {
   }
 
   /** Compute a layout for the nodes of one region and apply it as one moveNodes op. */
-  layoutRegion(regionId: string, strategy: LayoutStrategy, principal: Principal): WriteResult & { moved?: number } {
+  layoutRegion(
+    regionId: string,
+    strategy: LayoutStrategy,
+    principal: Principal,
+  ): WriteResult & { moved?: number; total?: number; truncated?: boolean; message?: string } {
     const store = this.store;
     const region = store.getRegion(entityIdSchema.parse(regionId));
     if (!region) return { ok: false, version: store.getWorld().version, error: { code: 'NOT_FOUND', message: `Region ${regionId} does not exist.`, id: regionId } };
     if (!LAYOUT_STRATEGIES.includes(strategy)) {
       return { ok: false, version: store.getWorld().version, error: { code: 'INVALID_OP', message: `Unknown layout strategy ${String(strategy)}.` } };
     }
-    const nodes = store.nodeIdsInRegion(region.id, 1000);
+    const total = store.countNodesInRegion(region.id);
+    const nodes = store.nodeIdsInRegion(region.id, LAYOUT_MAX_NODES);
+    const truncated = total > nodes.length;
+    const info = {
+      total,
+      truncated,
+      ...(truncated
+        ? { message: `Laid out ${nodes.length} of ${total} nodes in region ${region.id} (first ${LAYOUT_MAX_NODES} by id). The rest were not moved; split the region to lay them out.` }
+        : {}),
+    };
     const edges = store.edgesTouching(nodes.map((n) => n.id), 50_000);
     const moves = layoutNodes(nodes, edges, region.bounds, strategy);
     if (moves.length === 0) {
-      return { ok: true, version: store.getWorld().version, seq: 0, nodes: [], edges: [], removedNodes: [], removedEdges: [], proposals: [], moved: 0 };
+      return { ok: true, version: store.getWorld().version, seq: 0, nodes: [], edges: [], removedNodes: [], removedEdges: [], proposals: [], moved: 0, ...info };
     }
     const result = this.#write([{ op: 'moveNodes', moves }], principal, `layout_region:${strategy}`, null);
-    return result.ok ? { ...result, moved: moves.length } : result;
+    return result.ok ? { ...result, moved: moves.length, ...info } : result;
   }
 
   /**
@@ -408,7 +448,9 @@ export class WorldAgent extends Agent<Env, WorldSummaryState> {
       removedNodes: changes.removedNodes,
       removedEdges: changes.removedEdges,
     };
-    this.broadcast(JSON.stringify(diff));
+    // Never push to a socket whose credential has expired or been revoked.
+    const without = this.#closeUnauthorizedSockets();
+    this.broadcast(JSON.stringify(diff), without);
     this.setState({
       worldId: this.name,
       title: world.title,
@@ -418,11 +460,72 @@ export class WorldAgent extends Agent<Env, WorldSummaryState> {
       edgeCount: counts.edges,
       lastChange: { seq: changes.seq, harness: actor.harness, actor: actor.actor ?? null, at: actor.at },
     });
-    const job = this.#indexQueue.then(() => syncIndex(this.env, world, counts.nodes, changes.nodes, changes.removedNodes)).catch((error: unknown) => {
-      console.error('world-edge: index sync failed', { worldId: this.name, version: changes.version, error: String(error) });
-    });
+    // Persist the job first: if the sync fails (or the object is evicted)
+    // it stays in index_jobs and is retried, instead of being lost.
+    store.enqueueIndexJob(changes.nodes.map((n) => n.id), changes.removedNodes, actor.at);
+    this.ctx.waitUntil(this.#kickIndex());
+  }
+
+  /** Chain one drain of index_jobs behind any running one. */
+  #kickIndex(): Promise<void> {
+    const job = this.#indexQueue.then(() => this.#drainIndex());
     this.#indexQueue = job;
-    this.ctx.waitUntil(job);
+    return job;
+  }
+
+  /**
+   * Apply pending index jobs oldest first. Nodes are re-read from the store,
+   * so a retry writes current data (D1 upserts are version-guarded). Stops at
+   * the first failure so a later job never overtakes an earlier one, and
+   * schedules a retry with backoff.
+   */
+  async #drainIndex(): Promise<void> {
+    const store = this.store;
+    for (;;) {
+      const job = store.nextIndexJob();
+      if (!job) return;
+      try {
+        const world = store.getWorld();
+        const nodes = store.getNodes(job.nodeIds);
+        await this.indexSync(this.env, world, store.counts().nodes, nodes, job.removedIds);
+        store.completeIndexJob(job.seq);
+      } catch (error) {
+        store.failIndexJob(job.seq, String(error));
+        console.error('world-edge: index sync failed; will retry', { worldId: this.name, job: job.seq, attempts: job.attempts + 1, error: String(error) });
+        if (!this.#retryScheduled) {
+          this.#retryScheduled = true;
+          const delay = Math.min(INDEX_RETRY_BASE_SECONDS * 2 ** Math.min(job.attempts, 10), INDEX_RETRY_MAX_SECONDS);
+          try {
+            await this.schedule(delay, 'retryIndexJobs');
+          } catch (scheduleError) {
+            // The job stays persisted; the next write drains it.
+            this.#retryScheduled = false;
+            console.error('world-edge: could not schedule index retry', String(scheduleError));
+          }
+        }
+        return;
+      }
+    }
+  }
+
+  /**
+   * Close every socket whose principal is no longer valid (Access assertion
+   * expired, service token no longer in MCP_SERVICE_TOKENS). Returns their
+   * ids so a broadcast can skip them.
+   */
+  #closeUnauthorizedSockets(): string[] {
+    const closed: string[] = [];
+    for (const connection of this.getConnections<{ principal?: Principal }>()) {
+      const principal = connection.state?.principal as Principal | undefined;
+      if (principal && principalStillValid(principal, this.env)) continue;
+      closed.push(connection.id);
+      try {
+        connection.close(WS_UNAUTHORIZED, 'credential expired or revoked');
+      } catch {
+        // Already closing.
+      }
+    }
+    return closed;
   }
 
   // ------------------------------------------------- state sync guards ----
@@ -436,8 +539,8 @@ export class WorldAgent extends Agent<Env, WorldSummaryState> {
 
   onConnect(connection: Connection, ctx: ConnectionContext): void {
     const principal = decodePrincipal(ctx.request.headers.get(PRINCIPAL_HEADER));
-    if (!principal) {
-      connection.close(4401, 'unauthenticated');
+    if (!principal || !principalStillValid(principal, this.env)) {
+      connection.close(WS_UNAUTHORIZED, 'unauthenticated');
       return;
     }
     connection.setState({ principal });
@@ -459,9 +562,11 @@ export class WorldAgent extends Agent<Env, WorldSummaryState> {
     }
     const id = typeof msg.id === 'string' || typeof msg.id === 'number' ? msg.id : null;
     const reply = (result: unknown) => connection.send(JSON.stringify({ id, type: 'result', result }));
+    // The socket was authorized at upgrade; the credential can expire or be
+    // revoked since. Re-check on every message, writes included.
     const principal = (connection.state as { principal?: Principal } | null)?.principal;
-    if (!principal) {
-      connection.close(4401, 'unauthenticated');
+    if (!principal || !principalStillValid(principal, this.env)) {
+      connection.close(WS_UNAUTHORIZED, principal ? 'credential expired or revoked' : 'unauthenticated');
       return;
     }
     try {
@@ -501,7 +606,14 @@ export class WorldAgent extends Agent<Env, WorldSummaryState> {
       if (request.method === 'GET' && tail === 'log') {
         return Response.json(this.listOps(Number(url.searchParams.get('after') ?? 0), Number(url.searchParams.get('limit') ?? 100)));
       }
-      if (request.method === 'GET' && tail === 'proposals') return Response.json(this.listProposals(url.searchParams.get('status') ?? undefined));
+      if (request.method === 'GET' && tail === 'proposals') {
+        const p = url.searchParams;
+        return Response.json(this.listProposals({
+          ...(p.get('status') ? { status: p.get('status')! } : {}),
+          ...(p.get('limit') ? { limit: Number(p.get('limit')) } : {}),
+          ...(p.get('cursor') ? { cursor: p.get('cursor')! } : {}),
+        }));
+      }
       if (request.method === 'GET') return Response.json(this.getWorldInfo());
     } catch (error) {
       return Response.json({ ok: false, error: { code: 'INVALID_OP', message: error instanceof Error ? error.message : String(error) } }, { status: 400 });

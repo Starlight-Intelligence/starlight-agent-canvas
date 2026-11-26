@@ -32,7 +32,7 @@ export default {
     const clean = new Request(request, { headers });
 
     if (url.pathname === '/health') return Response.json({ ok: true, service: 'world-edge' });
-    if (url.pathname === '/media/upload') return receiveUpload(clean, env);
+    if (url.pathname === '/media/upload' || url.pathname === '/media/upload/') return receiveUpload(clean, env);
 
     const oauth = resolveOAuth(env);
     if (oauth.state === 'on') return fetchWithOAuth(oauth.provider, clean, env, ctx);

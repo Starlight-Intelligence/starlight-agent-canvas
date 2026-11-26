@@ -43,7 +43,7 @@ describe('Access JWT verification', () => {
     const fetcher: JwksFetcher = async () => ({ keys: [jwk] });
     const now = Math.floor(Date.now() / 1000);
     const token = await sign(pair.privateKey, { iss: TEAM, aud: [AUD], email: 'frank@example.com', exp: now + 600, iat: now }, kid);
-    await expect(verifyAccessJwt(token, accessEnv, { fetcher })).resolves.toEqual({ harness: 'human', actor: 'frank@example.com', via: 'access' });
+    await expect(verifyAccessJwt(token, accessEnv, { fetcher })).resolves.toEqual({ harness: 'human', actor: 'frank@example.com', via: 'access', expiresAt: (now + 600) * 1000 });
   });
 
   it('rejects wrong audience, wrong issuer, expiry, unknown key and tampering', async () => {
@@ -69,7 +69,7 @@ describe('Access JWT verification', () => {
 
 describe('service tokens', () => {
   it('maps a known token to its harness and rejects unknown ones', async () => {
-    await expect(verifyServiceToken(testEnv.TEST_TOKENS.claude, testEnv)).resolves.toEqual({ harness: 'claude', actor: 'claude-test', via: 'service-token' });
+    await expect(verifyServiceToken(testEnv.TEST_TOKENS.claude, testEnv)).resolves.toEqual({ harness: 'claude', actor: 'claude-test', via: 'service-token', tokenSha256: expect.stringMatching(/^[0-9a-f]{64}$/) });
     await expect(verifyServiceToken('not-a-real-token-at-all', testEnv)).resolves.toBeNull();
     await expect(verifyServiceToken(testEnv.TEST_TOKENS.claude, { MCP_SERVICE_TOKENS: 'not json' })).resolves.toBeNull();
     await expect(verifyServiceToken(testEnv.TEST_TOKENS.claude, {})).resolves.toBeNull();
@@ -239,7 +239,7 @@ describe('Access JWT principal mapping', () => {
     const env = { ...testEnv, ...accessEnv } as unknown as Env;
     const at = (jwt: string) => new Request('https://x/agents/world-agent/a', { headers: { 'cf-access-jwt-assertion': jwt } });
     await expect(authenticate(at(t.serviceJwt), env, { fetcher })).resolves.toBeNull();
-    await expect(authenticate(at(t.identityJwt), env, { fetcher })).resolves.toEqual({ harness: 'human', actor: 'frank@example.com', via: 'access' });
+    await expect(authenticate(at(t.identityJwt), env, { fetcher })).resolves.toEqual({ harness: 'human', actor: 'frank@example.com', via: 'access', expiresAt: expect.any(Number) });
   });
 
   it('authenticateMcp accepts only a bearer service token and never reads Access JWTs', async () => {
@@ -250,7 +250,7 @@ describe('Access JWT principal mapping', () => {
     await expect(authenticateMcp(req({ 'cf-access-jwt-assertion': t.serviceJwt }), env)).resolves.toBeNull();
     await expect(authenticateMcp(req({ authorization: 'Bearer wrong-token-wrong-token', 'cf-access-jwt-assertion': t.identityJwt }), env)).resolves.toBeNull();
     await expect(authenticateMcp(req({ authorization: `Bearer ${testEnv.TEST_TOKENS.claude}`, 'cf-access-jwt-assertion': t.identityJwt }), env))
-      .resolves.toEqual({ harness: 'claude', actor: 'claude-test', via: 'service-token' });
+      .resolves.toEqual({ harness: 'claude', actor: 'claude-test', via: 'service-token', tokenSha256: expect.stringMatching(/^[0-9a-f]{64}$/) });
   });
 });
 
