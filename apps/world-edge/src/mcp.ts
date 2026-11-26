@@ -97,7 +97,7 @@ export function buildWorldMcpServer(env: Env, principal: Principal): McpServer {
   }, async ({ worldId, ...proposal }) => fromWrite(await (await world(worldId)).proposeCanon(proposal, principal)));
 
   server.registerTool('layout_region', {
-    description: 'Lay out the nodes of one region (grid, layered, or force) and apply the result as moves.',
+    description: 'Lay out the nodes of one region (grid, layered, or force) and apply the result as moves. At most 1000 nodes per call; larger regions return truncated: true with total and a message.',
     inputSchema: TOOL_INPUTS.layout_region,
     annotations: WRITE,
   }, async ({ worldId, regionId, strategy }) => fromWrite(await (await world(worldId)).layoutRegion(regionId, strategy, principal)));
@@ -125,7 +125,8 @@ export function buildWorldMcpServer(env: Env, principal: Principal): McpServer {
 
 /**
  * Search with graceful degradation: Vectorize + Workers AI, then D1 LIKE,
- * then the Durable Object's own LIKE search (no bindings at all).
+ * then the Durable Object's own LIKE search. Each step falls through on a
+ * missing binding, an error, or (semantic only) an empty result.
  */
 export async function searchWorld(
   env: Env,
@@ -144,13 +145,19 @@ export async function searchWorld(
         .map((m) => (byId.has(m.nodeId) ? toHit(byId.get(m.nodeId)!, m.score) : null))
         .filter((h): h is SearchHit => h !== null && (!kinds || kinds.length === 0 || kinds.includes(h.kind)))
         .slice(0, limit);
-      return { mode: 'semantic', hits };
+      // Vectorize can lag behind writes or miss a world entirely; an empty
+      // semantic answer falls through to text search.
+      if (hits.length > 0) return { mode: 'semantic', hits };
     }
   } catch (error) {
     console.warn('world-edge: semantic search failed, falling back', String(error));
   }
-  const d1 = await d1Search(env, worldId, query, kinds, limit);
-  if (d1) return { mode: 'd1-like', hits: d1 };
+  try {
+    const d1 = await d1Search(env, worldId, query, kinds, limit);
+    if (d1) return { mode: 'd1-like', hits: d1 };
+  } catch (error) {
+    console.warn('world-edge: D1 search failed, falling back to the Durable Object', String(error));
+  }
   return { mode: 'do-like', hits: (await agent.searchLocal(query, kinds ? [...kinds] : undefined, limit)) as SearchHit[] };
 }
 

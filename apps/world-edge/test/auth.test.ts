@@ -40,7 +40,7 @@ describe('Access JWT verification', () => {
     const fetcher: JwksFetcher = async () => ({ keys: [jwk] });
     const now = Math.floor(Date.now() / 1000);
     const token = await sign(pair.privateKey, { iss: TEAM, aud: [AUD], email: 'frank@example.com', exp: now + 600, iat: now });
-    await expect(verifyAccessJwt(token, accessEnv, { fetcher })).resolves.toEqual({ harness: 'human', actor: 'frank@example.com', via: 'access' });
+    await expect(verifyAccessJwt(token, accessEnv, { fetcher })).resolves.toEqual({ harness: 'human', actor: 'frank@example.com', via: 'access', expiresAt: (now + 600) * 1000 });
   });
 
   it('rejects wrong audience, wrong issuer, expiry, unknown key and tampering', async () => {
@@ -66,7 +66,7 @@ describe('Access JWT verification', () => {
 
 describe('service tokens', () => {
   it('maps a known token to its harness and rejects unknown ones', async () => {
-    await expect(verifyServiceToken(testEnv.TEST_TOKENS.claude, testEnv)).resolves.toEqual({ harness: 'claude', actor: 'claude-test', via: 'service-token' });
+    await expect(verifyServiceToken(testEnv.TEST_TOKENS.claude, testEnv)).resolves.toEqual({ harness: 'claude', actor: 'claude-test', via: 'service-token', tokenSha256: expect.stringMatching(/^[0-9a-f]{64}$/) });
     await expect(verifyServiceToken('not-a-real-token-at-all', testEnv)).resolves.toBeNull();
     await expect(verifyServiceToken(testEnv.TEST_TOKENS.claude, { MCP_SERVICE_TOKENS: 'not json' })).resolves.toBeNull();
     await expect(verifyServiceToken(testEnv.TEST_TOKENS.claude, {})).resolves.toBeNull();

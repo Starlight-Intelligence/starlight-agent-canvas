@@ -1,13 +1,13 @@
 # world-edge
 
-Cloudflare Worker for the World Canvas (issue #63, lane L2). One Durable Object per world holds the World Graph from `@starlight-agent-canvas/world`, applies GraphOps through its `applyOps`, keeps an append-only ops log, and broadcasts diffs to every connected browser and agent. The same Worker serves an MCP endpoint at `/mcp` so Claude, Codex and ChatGPT edit the same graph.
+Cloudflare Worker for the World Canvas (issue #63, lane L2). One Durable Object per world holds the World Graph from `@starlight-agent-canvas/world`, applies GraphOps through its `applyOps`, keeps an append-only ops log, and broadcasts diffs to every connected browser and agent. The same Worker serves an MCP endpoint at `/mcp` so MCP clients that can send a bearer service token (Claude Code, Codex) edit the same graph. ChatGPT connectors need OAuth, which this Worker does not implement; see "Connecting agents" below.
 
 Nothing in this directory deploys itself. The first deploy, the Cloudflare Access policy and any custom domain are Frank's decision.
 
 ## Architecture
 
 ```text
- Browser (canvas UI, L3)          MCP clients (Claude, Codex, ChatGPT)
+ Browser (canvas UI, L3)          MCP clients (Claude, Codex; bearer)
    | Access cookie                   | Authorization: Bearer <service token>
    | Cf-Access-Jwt-Assertion         |
    v                                 v
@@ -47,7 +47,7 @@ Nothing in this directory deploys itself. The first deploy, the Cloudflare Acces
 1. A client sends a batch of GraphOps (MCP tool, WebSocket message, or `POST /agents/world-agent/<worldId>/ops`).
 2. `WorldAgent` loads only what the batch needs: all regions, every node and edge the ops name, the deterministic id an `addEdge` would get, and the edges around a removed node. That subgraph goes through L1 `applyOps`, which owns every rule: strict op schemas, `STALE_VERSION`, `CANON_FORBIDDEN`, `CANON_LOCKED`, `DUPLICATE_ID`. A test checks that the subgraph gives the same answer as `applyOps` on the full graph.
 3. On success, changed rows, the new world version and one `ops_log` row (harness, actor, ops, changed ids, prior JSON of every touched entity) are written in one SQLite transaction. On failure nothing is written and the caller gets the spec error, including `expectedVersion` and `actualVersion` for stale writes (HTTP 409).
-4. The agent broadcasts a `world.diff` message with the changed entities, updates its small synced state (version, counts, last change), and mirrors changed nodes into D1 and Vectorize through `waitUntil`. The DO stays the source of truth; the index can be rebuilt from it.
+4. The agent broadcasts a `world.diff` message with the changed entities, updates its small synced state (version, counts, last change), and mirrors changed nodes into D1 and Vectorize through `waitUntil`. Each batch first writes an `index_jobs` row in the DO; the row is deleted only after D1 and Vectorize accept it. A failed sync stays queued and is retried in order (alarm with backoff from 5 s to 1 h, and on the next write), re-reading current node data. The DO stays the source of truth; the index can be rebuilt from it.
 
 ### Canon
 
@@ -57,7 +57,7 @@ Tool input schemas live in `packages/world/src/tools.ts` and are shared with the
 
 - Nodes carry `tile_key` (`floor(x/2048):floor(y/2048)`, spec section 6), `x`, `y`, `w`, `h`, `region_id` and `kind` columns with indexes on tile, region, position and kind.
 - `get_region(bounds | regionId, level | zoom)` reads only the tiles that overlap the bounds (padded one tile up and left so nodes that start outside still show), then filters exact box overlap in SQL.
-  - `cluster` (zoom below 0.4): per-tile counts by kind and the mean position. No nodes.
+  - `cluster` (zoom below 0.4): per-tile counts by kind and the mean position, over the same node set as `card` (exact overlap plus oversized nodes). No nodes.
   - `card`: id, kind, title, tags, position, size, canon, version and one thumbnail. No body.
   - `full`: complete nodes.
 - Limits: at most 1024 tiles per query (`BOUNDS_TOO_LARGE` otherwise), 2000 nodes by default and 5000 at most, with `truncated: true` when either list is cut (`nodesTruncated` and `edgesTruncated` say which; edges cap at 20000). Edges come back when either end is in the result. Nodes larger than one tile are found through a separate partial index, so they show wherever they overlap the viewport.
@@ -90,12 +90,14 @@ Tool input schemas live in `packages/world/src/tools.ts` and are shared with the
 | `GET /agents/world-agent/<worldId>/region?x&y&w&h&level` | bearer or Access | same as `get_region` |
 | `POST /agents/world-agent/<worldId>/ops` | bearer or Access | `{ops: GraphOp[]}`; 409 on `STALE_VERSION` |
 | `GET /agents/world-agent/<worldId>/log?after&limit` | bearer or Access | ops log |
-| `GET /agents/world-agent/<worldId>/proposals?status=open` | bearer or Access | canon proposals |
+| `GET /agents/world-agent/<worldId>/proposals?status=open&limit&cursor` | bearer or Access | canon proposals, `{proposals, nextCursor}`; 100 per page by default, 500 at most |
 | `POST /media/sign` | bearer or Access | `{worldId, filename, contentType}` gives a 15 minute PUT URL |
-| `PUT /media/upload?...` | signed URL | write-once; content type and uploader are bound into the signature |
-| `GET /media/object/<key>` | bearer or Access | read media |
+| `PUT /media/upload?...` | signed URL | one upload per key: the R2 put is conditional (`onlyIf: etagDoesNotMatch '*'`), so replaying the URL before it expires gets 409. Content type and uploader are bound into the signature. This does not make objects immutable: anything with direct R2 write access can still overwrite or delete them |
+| `GET /media/object/<key>` | bearer or Access | read media; only `worlds/<worldId>/media/<file>` keys, 400 on a malformed percent-encoding |
 
 WebSocket messages from the server: `world.hello` (on connect), `world.diff` (after every accepted batch), plus the Agents SDK state frame with the small summary. Messages to the server: `{id, type: "ops", ops}`, `{id, type: "get_region", query}`, `{id, type: "get_world"}`; replies are `{id, type: "result", result}`. Clients cannot set Agent state directly.
+
+A socket keeps the credential it was opened with, and it is re-checked on every message and before every broadcast: once an Access assertion passes its `exp`, or a service token is no longer listed in `MCP_SERVICE_TOKENS`, the socket is closed with code 4401 and gets no more diffs.
 
 ## MCP tools
 
@@ -105,13 +107,13 @@ All tools take `worldId`, validate input with zod schemas built from `packages/w
 | --- | --- | --- |
 | `get_world` | no | world record, regions, counts by kind and relation |
 | `get_region` | no | region or bounds at a zoom level |
-| `search` | no | `mode` says which path answered: `semantic`, `d1-like` or `do-like` |
+| `search` | no | `mode` says which path answered: `semantic`, `d1-like` or `do-like`. An empty or failed semantic answer and a D1 error fall through to the next path. Text search splits the query into at most 4 terms, escapes LIKE wildcards and cuts each pattern to the 50-byte SQLite LIKE limit of D1 and DO storage |
 | `add_node` | yes | id generated with `newId('n', title)` when omitted; no `canon` field, nodes start as drafts |
 | `update_node` | yes | needs `baseVersion` |
 | `link` | yes | deterministic edge id, so linking twice is `DUPLICATE_ID` |
 | `move` | yes | each move carries `baseVersion` |
 | `propose_canon` | yes | `{title, targets: [{type, id, baseVersion}], rationale}`; sets `proposed`, records a proposal row |
-| `layout_region` | yes | `grid`, `layered` or `force` inside the region bounds, applied as one `moveNodes` |
+| `layout_region` | yes | `grid`, `layered` or `force` inside the region bounds, applied as one `moveNodes`. At most 1000 nodes per call (first by id); larger regions return `truncated: true`, `total` and a message |
 | `import_whiteboard` | yes | claude.ai whiteboard export into an empty world, all draft; `dryRun` returns the report only |
 
 ## Local dev

@@ -82,7 +82,7 @@ describe('WorldAgent op application', () => {
     expect(proposed.proposalId).toMatch(/^cp_canon_/);
     expect(proposed.nodes.every((n) => n.canon.status === 'proposed')).toBe(true);
 
-    const proposals = await agent.listProposals('open');
+    const { proposals } = await agent.listProposals({ status: 'open' });
     expect(proposals).toHaveLength(1);
     expect(proposals[0]).toMatchObject({ title: 'Add the Foundation gate', nodeIds: ['n_gate', 'n_god'], rationale: 'Matches the locked gate list.', harness: 'codex', prUrl: null });
 
