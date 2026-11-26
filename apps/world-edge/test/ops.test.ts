@@ -14,8 +14,10 @@ describe('WorldAgent op application', () => {
     ], claude)) as WriteResult;
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.version).toBe(1);
-    expect(result.nodes.map((n) => n.id).sort()).toEqual(['n_a', 'n_b']);
+    // One world-wide version counter: each change takes the next value.
+    expect(result.version).toBe(3);
+    expect(result.nodes.map((n) => [n.id, n.version]).sort()).toEqual([['n_a', 1], ['n_b', 2]]);
+    expect(result.edges[0]!.version).toBe(3);
     expect(result.nodes[0]!.createdBy).toMatchObject({ harness: 'claude', actor: 'claude-test' });
     expect(result.edges).toHaveLength(1);
 
@@ -24,17 +26,17 @@ describe('WorldAgent op application', () => {
     ], human)) as WriteResult;
     expect(update.ok).toBe(true);
     if (update.ok) {
-      expect(update.version).toBe(2);
-      expect(update.nodes[0]).toMatchObject({ id: 'n_a', version: 2, summary: 'First of the line.' });
+      expect(update.version).toBe(4);
+      expect(update.nodes[0]).toMatchObject({ id: 'n_a', version: 4, summary: 'First of the line.' });
     }
 
     const log = await agent.listOps();
     expect(log.map((e) => [e.worldVersion, e.harness, e.actor])).toEqual([
-      [1, 'claude', 'claude-test'],
-      [2, 'human', 'frank@example.com'],
+      [3, 'claude', 'claude-test'],
+      [4, 'human', 'frank@example.com'],
     ]);
     const info = await agent.getWorldInfo();
-    expect(info.world.version).toBe(2);
+    expect(info.world.version).toBe(4);
     expect(info.counts).toMatchObject({ nodes: 2, edges: 1 });
   });
 
@@ -72,7 +74,7 @@ describe('WorldAgent op application', () => {
     await agent.applyBatch([nodeOp('n_gate'), nodeOp('n_god')], claude);
     const proposed = (await agent.proposeCanon({
       title: 'Add the Foundation gate',
-      targets: [{ type: 'node', id: 'n_gate', baseVersion: 1 }, { type: 'node', id: 'n_god', baseVersion: 1 }],
+      targets: [{ type: 'node', id: 'n_gate', baseVersion: 1 }, { type: 'node', id: 'n_god', baseVersion: 2 }],
       rationale: 'Matches the locked gate list.',
     }, codex)) as WriteResult & { proposalId?: string };
     expect(proposed.ok).toBe(true);
@@ -138,7 +140,7 @@ describe('WorldAgent op application', () => {
     const agent = await agentFor(worldName());
     await agent.applyBatch([nodeOp('n_a'), nodeOp('n_b')], claude);
     await runInDurableObject(agent, (instance: WorldAgent) => {
-      expect(instance.state).toMatchObject({ version: 1, nodeCount: 2, edgeCount: 0, lastChange: { harness: 'claude' } });
+      expect(instance.state).toMatchObject({ version: 2, nodeCount: 2, edgeCount: 0, lastChange: { harness: 'claude' } });
       expect(JSON.stringify(instance.state)).not.toContain('n_a');
     });
   });
