@@ -156,6 +156,19 @@ importers:
         specifier: ^26.6.6
         version: 26.6.6
 
+  packages/world-agents:
+    dependencies:
+      '@starlight-agent-canvas/world':
+        specifier: workspace:*
+        version: link:../world
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
+    devDependencies:
+      '@types/node':
+        specifier: ^26.6.6
+        version: 26.6.6
+
 packages:
 
   '@ai-sdk/gateway@4.0.137':
