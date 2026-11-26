@@ -39,8 +39,10 @@ export function tileKey(position: Position, tileSize = TILE_SIZE): string {
   return `${Math.floor(position.x / tileSize)}:${Math.floor(position.y / tileSize)}`;
 }
 
-/** Most tiles one tileKeysForBounds call will enumerate. */
+/** Default for how many tiles one tileKeysForBounds call will enumerate. */
 export const MAX_TILES_PER_QUERY = 4096;
+/** Hard ceiling; a caller-provided `maxTiles` above this is clamped to it. */
+export const MAX_TILES_HARD_LIMIT = 65_536;
 
 /**
  * Tile keys overlapped by a rectangle, row-major. Throws RangeError when a tile
@@ -51,6 +53,8 @@ export const MAX_TILES_PER_QUERY = 4096;
  */
 export function tileKeysForBounds(bounds: Bounds, tileSize = TILE_SIZE, maxTiles = MAX_TILES_PER_QUERY): string[] {
   if (!Number.isFinite(tileSize) || tileSize <= 0) throw new RangeError(`tileSize must be > 0, got ${tileSize}`);
+  if (!Number.isSafeInteger(maxTiles) || maxTiles < 1) throw new RangeError(`maxTiles must be a positive integer, got ${maxTiles}`);
+  const limit = Math.min(maxTiles, MAX_TILES_HARD_LIMIT);
   const x0 = Math.floor(bounds.x / tileSize);
   const y0 = Math.floor(bounds.y / tileSize);
   const x1 = Math.floor((bounds.x + bounds.w) / tileSize);
@@ -59,8 +63,8 @@ export function tileKeysForBounds(bounds: Bounds, tileSize = TILE_SIZE, maxTiles
     throw new RangeError('bounds produce tile indices outside the safe integer range.');
   }
   const count = (x1 - x0 + 1) * (y1 - y0 + 1);
-  if (count > maxTiles) {
-    throw new RangeError(`bounds cover ${count} tiles; the limit is ${maxTiles}. Use a coarser tile size or per-tile counts.`);
+  if (count > limit) {
+    throw new RangeError(`bounds cover ${count} tiles; the limit is ${limit}. Use a coarser tile size or per-tile counts.`);
   }
   const keys: string[] = [];
   for (let ty = y0; ty <= y1; ty++) {
