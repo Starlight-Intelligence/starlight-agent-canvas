@@ -1,6 +1,7 @@
 import { z } from 'zod';
-import { edgeIdFor, slugify, stableId } from '../ids.js';
+import { edgeIdFor, hash53, slugify, stableId } from '../ids.js';
 import {
+  LIMITS,
   nodeKindSchema,
   WORLD_GRAPH_SCHEMA_VERSION,
   type Actor,
@@ -14,6 +15,9 @@ import {
   type WorldNode,
 } from '../schemas.js';
 import { validateWorldGraph } from '../validate.js';
+
+/** Same cap as `mediaSchema.originalSrc`. */
+const ORIGINAL_SRC_MAX = 100_000;
 
 /**
  * Importer for claude.ai whiteboard exports ("claude-whiteboard v1 elements").
@@ -393,7 +397,13 @@ export function importClaudeWhiteboard(input: unknown, options: ImportOptions = 
       updatedAt: at,
       version: 1,
       meta: {
-        import: { source: 'claude-whiteboard', elementIds: spec.elementIds },
+        // When one element expands into several nodes (a "God × Godbeast" line,
+        // a house list, a bullet list), `part` says which piece this node is.
+        import: {
+          source: 'claude-whiteboard',
+          elementIds: spec.elementIds,
+          ...(spec.key.includes('#') ? { part: spec.key.slice(spec.key.indexOf('#') + 1) } : {}),
+        },
         ...(spec.extraMeta ?? {}),
       },
     };
@@ -714,7 +724,8 @@ export function importClaudeWhiteboard(input: unknown, options: ImportOptions = 
       kind: kindFor(text, big ? 'concept' : 'note'),
       title,
       summary: firstParagraph(text),
-      body: text.includes('\n') ? text : '',
+      // Keep the full text whenever the summary would clip it, newline or not.
+      body: text.includes('\n') || text.length > LIMITS.summaryMax ? text : '',
       tags: big ? [] : ['note'],
       position: { x: el.x ?? 0, y: el.y ?? 0 },
       size: textSize(el),
@@ -761,7 +772,13 @@ export function importClaudeWhiteboard(input: unknown, options: ImportOptions = 
     const href = safeUrl(img.href);
     if (img.href && !href) warnings.push(`Image ${img.key} has a non-http href; kept in meta only.`);
     const media: Media[] = [];
-    if (img.src) {
+    let oversizedSrc: { length: number; hash53: string; prefix: string } | undefined;
+    if (img.src && img.src.length > ORIGINAL_SRC_MAX) {
+      // Too large for `originalSrc`. Keep the node and the rest of the import;
+      // record a fingerprint so the asset can be re-uploaded from the export.
+      oversizedSrc = { length: img.src.length, hash53: hash53(img.src).toString(36), prefix: img.src.slice(0, 64) };
+      warnings.push(`Image ${img.key} has a src of ${img.src.length} characters (limit ${ORIGINAL_SRC_MAX}); kept the node without media. Re-upload it from the export.`);
+    } else if (img.src) {
       media.push({
         alt: clip(title, 300),
         role,
@@ -790,6 +807,7 @@ export function importClaudeWhiteboard(input: unknown, options: ImportOptions = 
       extraMeta: {
         ...(img.by ? { generatedBy: img.by } : {}),
         ...(img.href && !href ? { originalHref: img.href } : {}),
+        ...(oversizedSrc ? { oversizedSrc, needsReupload: true } : {}),
       },
     });
     disposition.set(img.key, { as: 'node', nodeId: node.id });
