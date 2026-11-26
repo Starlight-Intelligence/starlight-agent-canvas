@@ -8,7 +8,8 @@ export type CanonProposalErrorCode =
   | 'DUPLICATE_NODE'
   | 'ALREADY_CANON'
   | 'UNSUPPORTED_TARGET'
-  | 'NOT_OPEN';
+  | 'NOT_OPEN'
+  | 'STALE_PROPOSAL';
 
 /** The proposal request or its nodes are not acceptable. Nothing was built. */
 export class CanonProposalError extends Error {
@@ -60,6 +61,8 @@ export type CanonPrStep =
   | 'setup'
   | 'token'
   | 'get-repo'
+  | 'find-pr'
+  | 'check-branch'
   | 'get-base-ref'
   | 'create-branch'
   | 'check-file'
@@ -76,6 +79,7 @@ export type CanonPrErrorCode =
   | 'REDIRECT'
   | 'HTTP_ERROR'
   | 'BRANCH_EXISTS'
+  | 'BRANCH_REF_INVALID'
   | 'FILE_EXISTS'
   | 'INVALID_RESPONSE';
 

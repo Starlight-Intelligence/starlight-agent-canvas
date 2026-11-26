@@ -16,6 +16,8 @@ function isCalendarDate(value: string): boolean {
   return date.getUTCFullYear() === y && date.getUTCMonth() === m - 1 && date.getUTCDate() === d;
 }
 
+export const PROPOSAL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
+
 const notBlank = (value: string) => value.trim().length > 0;
 
 /**
@@ -35,6 +37,22 @@ export const canonProposalRequestSchema = z.strictObject({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'date must be YYYY-MM-DD.')
     .refine(isCalendarDate, 'date must be a real calendar date.').optional(),
   slug: z.string().min(1).max(CANON_PROPOSAL_LIMITS.slugInputMax).optional(),
+  /**
+   * Id of the recorded L2 proposal row. When set, the branch and file name
+   * derive from it (not from the title), so every run for one row targets the
+   * same branch and openCanonPr can find a PR an earlier run opened.
+   */
+  proposalId: z.string().regex(PROPOSAL_ID_PATTERN, 'proposalId must match ^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$.').optional(),
+  /**
+   * World version recorded with the proposal. When set, every node must still
+   * be at or below it (versions come from the world-wide counter, so a node
+   * changed after the proposal has a higher version) or the build fails with
+   * STALE_PROPOSAL.
+   */
+  worldVersion: z.number().int().nonnegative().optional(),
+}).refine((req) => req.proposalId === undefined || req.slug === undefined, {
+  message: 'slug cannot be combined with proposalId; the branch derives from the proposal id.',
+  path: ['slug'],
 });
 
 export type CanonProposalRequest = z.infer<typeof canonProposalRequestSchema>;

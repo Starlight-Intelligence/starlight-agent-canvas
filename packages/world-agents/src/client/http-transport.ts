@@ -425,6 +425,7 @@ async function readJsonRpcResponse(
     throw new WorldTransportError(`MCP ${method} returned unsupported content type "${sanitize(contentType)}".`, response.status);
   }
   if (!found) throw new WorldTransportError(`MCP ${method} returned no JSON-RPC response for request ${id}.`, response.status);
+  assertWellFormedResponse(found, method, response.status);
   return found;
 }
 
@@ -432,6 +433,26 @@ function isResponseFor(message: unknown, id: number): message is JsonRpcResponse
   if (!message || typeof message !== 'object') return false;
   const m = message as Record<string, unknown>;
   return m.jsonrpc === '2.0' && m.id === id && ('result' in m || 'error' in m);
+}
+
+/**
+ * JSON-RPC 2.0 section 5: a response has exactly one of `result` and `error`,
+ * and `error` is an object with a numeric code and a string message. Anything
+ * else is a protocol error, never a success.
+ */
+function assertWellFormedResponse(response: JsonRpcResponse, method: string, status: number): void {
+  const m = response as unknown as Record<string, unknown>;
+  const hasResult = 'result' in m;
+  const hasError = 'error' in m;
+  if (hasResult === hasError) {
+    throw new WorldTransportError(`MCP ${method} returned a JSON-RPC response with ${hasResult ? 'both result and error' : 'neither result nor error'}.`, status);
+  }
+  if (hasError) {
+    const error = m.error as Record<string, unknown> | null;
+    if (!error || typeof error !== 'object' || Array.isArray(error) || typeof error.code !== 'number' || typeof error.message !== 'string') {
+      throw new WorldTransportError(`MCP ${method} returned a malformed JSON-RPC error object.`, status);
+    }
+  }
 }
 
 /** Reads SSE events until one carries the JSON-RPC response for `id`, then stops reading. */
@@ -510,7 +531,12 @@ function readToolResult(tool: string, response: JsonRpcResponse, sanitize: (text
     });
   }
   const result = response.result as { isError?: unknown; structuredContent?: unknown; content?: unknown } | undefined;
-  if (!result || typeof result !== 'object') throw new WorldTransportError(`${tool} returned no result.`);
+  if (!result || typeof result !== 'object' || Array.isArray(result)) throw new WorldTransportError(`${tool} returned no result.`);
+  // MCP CallToolResult.isError is an optional boolean. A string "true", 1 or
+  // null is a broken server, not a success.
+  if ('isError' in result && result.isError !== undefined && typeof result.isError !== 'boolean') {
+    throw new WorldTransportError(`${tool} returned a non-boolean isError (${typeof result.isError}).`);
+  }
 
   const content = Array.isArray(result.content) ? result.content : [];
   const firstText = content.find((item): item is { type: 'text'; text: string } =>

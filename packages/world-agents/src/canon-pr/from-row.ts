@@ -40,7 +40,11 @@ function firstIssue(error: z.ZodError): string {
 /**
  * Turns an L2 canon proposal row into a canon proposal request for
  * buildCanonProposal. The date is the UTC date of `createdAt`. A null actor is
- * left out. Throws CanonProposalError: NOT_OPEN when the row is not `open` or
+ * left out. The request carries the row's id and world version:
+ * buildCanonProposal then derives the branch from the id (so retries for one
+ * row reuse one branch and PR) and refuses, with STALE_PROPOSAL, any node that
+ * is no longer `proposed` or changed after the recorded world version, so an
+ * edited node is never published under the original proposer. Throws CanonProposalError: NOT_OPEN when the row is not `open` or
  * already has a PR URL, UNSUPPORTED_TARGET when the row names
  * edges (edge proposals are not supported here yet, and are never dropped
  * silently), INVALID_REQUEST when the row or the resulting request is invalid.
@@ -72,6 +76,10 @@ export function canonProposalRequestFromRow(row: unknown, options: CanonProposal
     rationale: r.rationale,
     proposer: r.actor === null ? { harness: r.harness } : { harness: r.harness, actor: r.actor },
     date: new Date(r.createdAt).toISOString().slice(0, 10),
+    // Carried so buildCanonProposal refuses nodes changed after the proposal
+    // (STALE_PROPOSAL) and names the branch after this row, not the title.
+    proposalId: r.id,
+    worldVersion: r.worldVersion,
   };
   const parsedRequest = canonProposalRequestSchema.safeParse(request);
   if (!parsedRequest.success) {

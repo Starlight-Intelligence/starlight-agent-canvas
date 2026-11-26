@@ -29,6 +29,22 @@ export interface WorldClient<HasWorld extends boolean = boolean> {
   importWhiteboard(args: WorldToolArgs<'import_whiteboard', HasWorld>): Promise<WorldToolOutput<'import_whiteboard'>>;
 }
 
+/** A dry-run request must get a dry-run result and a write request a write result. */
+function assertImportMode(input: { dryRun?: boolean }, output: { dryRun?: boolean }): void {
+  const askedDryRun = input.dryRun === true;
+  const gotDryRun = output.dryRun === true;
+  if (askedDryRun !== gotDryRun) {
+    throw new WorldClientValidationError('import_whiteboard', 'output', [{
+      code: 'custom',
+      path: ['dryRun'],
+      message: askedDryRun
+        ? 'Asked for a dry run but the server reported a write.'
+        : 'Asked for a write but the server reported a dry run; nothing was imported.',
+      input: output.dryRun,
+    }]);
+  }
+}
+
 export interface WorldClientOptions {
   transport: WorldTransport;
   /** Default world for every tool. An explicit worldId in a call wins. */
@@ -52,6 +68,7 @@ export function createWorldClient(options: WorldClientOptions): WorldClient {
     const payload = await transport.callTool(name, parsedInput.data as Record<string, unknown>);
     const parsedOutput = output.safeParse(payload);
     if (!parsedOutput.success) throw new WorldClientValidationError(name, 'output', parsedOutput.error.issues);
+    if (name === 'import_whiteboard') assertImportMode(parsedInput.data as { dryRun?: boolean }, parsedOutput.data as { dryRun?: boolean });
     return parsedOutput.data as WorldToolOutput<N>;
   }
 

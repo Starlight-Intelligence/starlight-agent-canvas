@@ -22,7 +22,7 @@ Contract: `docs/world-canvas/spec.md` and the zod schemas in `packages/world/src
 | `get_world` | Read title, version, regions, counts | `{worldId}`; read only |
 | `get_region` | Read nodes and edges in a region or bounds | `regionId` or `bounds` (or both), optional `level` (default `card`), `zoom`, `kinds`, `limit`; nodes carry `version`; check `truncated` |
 | `search` | Find nodes by text | `query`, optional `kinds` and `limit` (max 50); returns `hits` with id, kind, title, summary, position, regionId, but no `version` |
-| `add_node` | Create a node | `{worldId, node: {kind, title, position, regionId?, ...}}`; omit `node.id` and the server makes one |
+| `add_node` | Create a draft node | `{worldId, node: {kind, title, position, regionId?, ...}}`; omit `node.id` and the server makes one. No `canon` field: to propose, use `propose_canon` |
 | `update_node` | Change fields of a node | `{worldId, id, baseVersion, patch}`; no `canon`, no `position` (use `move`) |
 | `link` | Add an edge | `from relation to` reads as a sentence; same link twice is `DUPLICATE_ID` |
 | `move` | Change positions or region | `moves: [{id, baseVersion, position, regionId?}]`, up to 5000 |
@@ -53,10 +53,10 @@ Limits: title 1 to 300 chars, summary up to 2000, body (markdown) up to 200000, 
 
 ## The canon gate
 
-- `canon.status` is `draft`, `proposed` or `canon`. You can create `draft` (default) or `proposed`. You can never produce `canon`: the typed client rejects it locally, and the server rejects it with `CANON_FORBIDDEN`.
+- `canon.status` is `draft`, `proposed` or `canon`. `add_node` always creates a `draft` and takes no `canon` field at all: the typed client and the shared tool schema reject `canon` in `add_node`, including `canon: {status: "proposed"}`. The only way to make something `proposed` is `propose_canon` (below), because it records the proposal row the canon PR flow reads; a node marked proposed any other way would have no proposal behind it. You can never produce `canon`: the typed client rejects it locally, and the server rejects it with `CANON_FORBIDDEN`.
 - Canon nodes and edges cannot be updated or proposed again (`CANON_LOCKED`). Changing canon needs a change to the canon files in git, approved by the Creator, not an op. Canon nodes may be moved, because layout is not canon.
 - To ask for canon, call `propose_canon` with a short `title`, the `targets` with their current versions, and a clear `rationale` (why this belongs in canon, what it touches). The server marks them `proposed` and stores a proposal row; it does not call GitHub. A separate git flow (`canon-pr` in `@starlight-agent-canvas/world-agents`) turns an open proposal into a draft PR against arcanea-ai-app that adds one file under `.arcanea/lore/proposals/`. As of L2 commit 161c054 nothing runs that flow automatically: the proposal stays `open` until someone runs it, and canon-pr does not support edge targets yet. So tell the user the proposal is recorded, not that a PR was opened. It never edits `CANON_LOCKED.md` or any existing lore file. Only the Creator (Frank) approves canon; arcanea-ai-app's AGENTS.md says promotion happens only through `/lock-decision`.
-- Editing a `proposed` node sets it back to `draft`, because the recorded proposal (and any PR made from it) no longer matches. Finish edits before you propose.
+- Editing a `proposed` node sets it back to `draft`, because the recorded proposal (and any PR made from it) no longer matches. Finish edits before you propose. canon-pr also refuses (`STALE_PROPOSAL`) any target that is no longer `proposed` or whose version is newer than the world version recorded with the proposal, which includes a move; call `propose_canon` again after such a change.
 - Never describe a draft or proposed node to the user as canon.
 
 ## Regions and loading

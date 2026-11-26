@@ -113,6 +113,15 @@ function parseBody(body: string | undefined, refuse: (reason: string) => never):
  * Each of those writes may only carry the body keys in CANON_WRITE_BODY_KEYS.
  * Everything else is refused before fetch is called, including any DELETE,
  * tree/blob/commit writes, ref PATCHes, PR edits and PR merges.
+ *
+ * Branch state, per guard instance:
+ * - Before the first write the guard knows the repository's real default
+ *   branch (from a GET /repos/{owner}/{repo} it forwarded, or one it sends
+ *   itself with the write's headers) and refuses any write that names it.
+ * - A ref is only created after the branch was seen to be absent (a 404 from
+ *   GET git/ref/heads/<branch>, forwarded or sent by the guard).
+ * - File writes and pull requests must use a branch this guard created (a 2xx
+ *   answer to its ref creation), so no existing branch is ever written.
  */
 export function createCanonWriteGuard(fetchImpl: FetchLike, options: CanonWriteGuardOptions): FetchLike {
   if (typeof options?.owner !== 'string' || !OWNER_PATTERN.test(options.owner)) {
@@ -122,6 +131,24 @@ export function createCanonWriteGuard(fetchImpl: FetchLike, options: CanonWriteG
     throw new CanonGuardError('request', 'the guard needs a valid repo.');
   }
   const repoPath = `/repos/${options.owner}/${options.repo}`;
+  const repoUrl = `${GITHUB_API_ORIGIN}${repoPath}`;
+  let defaultBranch: string | undefined;
+  const absentBranches = new Set<string>();
+  const createdBranches = new Set<string>();
+
+  const readDefaultBranch = (text: string): void => {
+    try {
+      const value = (JSON.parse(text) as { default_branch?: unknown } | null)?.default_branch;
+      if (typeof value === 'string' && value.length > 0) defaultBranch = value;
+    } catch {
+      // Not JSON: leave unknown, the next write looks it up.
+    }
+  };
+  const readOnlyInit = (init: CanonFetchInit): CanonFetchInit => {
+    const headers = Object.fromEntries(Object.entries(init.headers ?? {}).filter(([key]) => key.toLowerCase() !== 'content-type'));
+    return { method: 'GET', headers, redirect: 'manual', ...(init.signal ? { signal: init.signal } : {}) };
+  };
+  const sameBranch = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 
   return async (url, init) => {
     const method = String(init?.method ?? 'GET').toUpperCase();
@@ -145,7 +172,42 @@ export function createCanonWriteGuard(fetchImpl: FetchLike, options: CanonWriteG
       refuse(`requests may only address ${repoPath}.`);
     }
     const forwarded: CanonFetchInit = { ...init, redirect: 'manual' };
-    if (READ_METHODS.has(method)) return fetchImpl(url, forwarded);
+    if (READ_METHODS.has(method)) {
+      const response = await fetchImpl(url, forwarded);
+      if (method === 'GET' && parsed.pathname === repoPath && response.status === 200) {
+        // Remember the default branch, and hand the caller the body that was read.
+        const text = await response.text();
+        readDefaultBranch(text);
+        return { status: response.status, type: response.type, text: async () => text };
+      }
+      const heads = `${repoPath}/git/ref/heads/`;
+      if (method === 'GET' && response.status === 404 && parsed.pathname.startsWith(heads)) {
+        try {
+          absentBranches.add(decodeURIComponent(parsed.pathname.slice(heads.length)));
+        } catch {
+          // Undecodable: never counts as absent.
+        }
+      }
+      return response;
+    }
+
+    /** Refuses unless `branch` is a branch other than the repository's real default branch. */
+    const refuseDefaultBranch = async (branch: string, what: string): Promise<void> => {
+      if (defaultBranch === undefined) {
+        const response = await fetchImpl(repoUrl, readOnlyInit(init));
+        if (response.status === 200) readDefaultBranch(await response.text());
+        if (defaultBranch === undefined) {
+          refuse(`could not read the repository's default branch (status ${response.status}); no write is sent without it.`);
+        }
+      }
+      if (sameBranch(branch, defaultBranch!)) refuse(`${what} targets the default branch ${defaultBranch}, which is never written.`);
+    };
+    /** Refuses unless `branch` was created by this guard. */
+    const refuseUnlessCreatedHere = (branch: string, what: string): void => {
+      if (!createdBranches.has(branch)) {
+        refuse(`${what} uses branch ${branch}, which this guard did not create; existing branches are never written.`);
+      }
+    };
 
     // Writes from here on. Refuse traversal in the raw URL before the URL
     // parser normalizes it away, so intent is checked as well as effect.
@@ -179,6 +241,8 @@ export function createCanonWriteGuard(fetchImpl: FetchLike, options: CanonWriteG
       if (typeof body.branch !== 'string' || !CANON_BRANCH_PATTERN.test(body.branch)) {
         refuse('contents write must target a canon/<slug> branch.');
       }
+      await refuseDefaultBranch(body.branch as string, 'contents write');
+      refuseUnlessCreatedHere(body.branch as string, 'contents write');
       return fetchImpl(url, forwarded);
     }
 
@@ -189,7 +253,20 @@ export function createCanonWriteGuard(fetchImpl: FetchLike, options: CanonWriteG
       if (typeof body.ref !== 'string' || !CANON_REF_PATTERN.test(body.ref)) {
         refuse('ref writes may only create refs/heads/canon/<slug>.');
       }
-      return fetchImpl(url, forwarded);
+      const branch = (body.ref as string).slice('refs/heads/'.length);
+      await refuseDefaultBranch(branch, 'ref creation');
+      if (!absentBranches.has(branch)) {
+        const check = await fetchImpl(`${repoUrl}/git/ref/heads/${branch}`, readOnlyInit(init));
+        if (check.status !== 404) {
+          refuse(`branch ${branch} already exists or could not be confirmed absent (status ${check.status}); existing branches are never written.`);
+        }
+      }
+      const response = await fetchImpl(url, forwarded);
+      if (response.status >= 200 && response.status < 300) {
+        createdBranches.add(branch);
+        absentBranches.delete(branch);
+      }
+      return response;
     }
     if (rest.startsWith('/git/refs/')) refuse('updating an existing ref can move a branch and is never allowed.');
     if (/^\/git\/(trees|blobs|commits)(\/|$)/.test(rest)) refuse('tree, blob and commit writes can change arbitrary files and are never allowed.');
@@ -202,6 +279,9 @@ export function createCanonWriteGuard(fetchImpl: FetchLike, options: CanonWriteG
       if (typeof body.head !== 'string' || !CANON_BRANCH_PATTERN.test(body.head)) refuse('pull requests must come from a canon/<slug> branch.');
       if (typeof body.base !== 'string' || body.base.startsWith('canon/')) refuse('pull requests must target a reviewed base branch, not a canon/ branch.');
       if (body.draft !== true) refuse('pull requests must be drafts.');
+      await refuseDefaultBranch(body.head as string, 'pull request head');
+      if (sameBranch(body.base as string, body.head as string)) refuse('pull request base and head must differ.');
+      refuseUnlessCreatedHere(body.head as string, 'pull request');
       return fetchImpl(url, forwarded);
     }
 

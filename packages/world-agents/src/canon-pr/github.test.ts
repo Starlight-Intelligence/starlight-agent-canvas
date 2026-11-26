@@ -25,7 +25,7 @@ function node(id: string, overrides: Partial<WorldNode> = {}): WorldNode {
     summary: '',
     body: 'Lumière über the 日本 shore. 🐉',
     tags: [],
-    canon: { status: 'draft' },
+    canon: { status: 'proposed' },
     media: [],
     position: { x: 0, y: 0 },
     regionId: null,
@@ -50,7 +50,7 @@ const proposal = buildCanonProposal(
   [node('n_orchard')],
 );
 
-type Step = 'get-repo' | 'get-base-ref' | 'create-branch' | 'check-file' | 'put-file' | 'open-pr';
+type Step = 'get-repo' | 'find-pr' | 'check-branch' | 'get-base-ref' | 'create-branch' | 'check-file' | 'put-file' | 'open-pr';
 type Reply = { status: number; json?: unknown } | ((init: CanonFetchInit) => Promise<ResponseLike>);
 interface Recorded {
   url: string;
@@ -64,6 +64,8 @@ interface Recorded {
 
 function stepOf(method: string, path: string): Step {
   if (method === 'GET' && /^\/repos\/[^/]+\/[^/]+$/.test(path)) return 'get-repo';
+  if (method === 'GET' && path.endsWith('/pulls')) return 'find-pr';
+  if (method === 'GET' && path.includes('/git/ref/heads/canon/')) return 'check-branch';
   if (method === 'GET' && path.includes('/git/ref/heads/')) return 'get-base-ref';
   if (method === 'POST' && path.endsWith('/git/refs')) return 'create-branch';
   if (method === 'GET' && path.includes('/contents/')) return 'check-file';
@@ -74,6 +76,8 @@ function stepOf(method: string, path: string): Step {
 
 const defaults: Record<Step, Reply> = {
   'get-repo': { status: 200, json: { default_branch: 'trunk' } },
+  'find-pr': { status: 200, json: [] },
+  'check-branch': { status: 404, json: { message: 'Not Found' } },
   'get-base-ref': { status: 200, json: { ref: 'refs/heads/main', object: { sha: SHA, type: 'commit' } } },
   'create-branch': { status: 201, json: { ref: 'refs/heads/canon/the-glass-orchard' } },
   'check-file': { status: 404, json: { message: 'Not Found' } },
@@ -126,6 +130,8 @@ describe('planCanonPr', () => {
   it('lists the calls with a known base', () => {
     const plan = planCanonPr(proposal, { ...target, base: 'main' });
     expect(plan.map((c) => [c.method, c.path])).toEqual([
+      ['GET', '/repos/Arcanea-Labs/arcanea-ai-app/pulls?state=open&head=Arcanea-Labs%3Acanon%2Fthe-glass-orchard&per_page=100'],
+      ['GET', '/repos/Arcanea-Labs/arcanea-ai-app/git/ref/heads/canon/the-glass-orchard'],
       ['GET', '/repos/Arcanea-Labs/arcanea-ai-app/git/ref/heads/main'],
       ['POST', '/repos/Arcanea-Labs/arcanea-ai-app/git/refs'],
       ['GET', '/repos/Arcanea-Labs/arcanea-ai-app/contents/.arcanea/lore/proposals/2026-03-14-the-glass-orchard.md?ref=canon%2Fthe-glass-orchard'],
@@ -133,26 +139,28 @@ describe('planCanonPr', () => {
       ['POST', '/repos/Arcanea-Labs/arcanea-ai-app/pulls'],
     ]);
     expect(plan[0]!.body).toBeNull();
-    expect(plan[1]!.body).toEqual({ ref: 'refs/heads/canon/the-glass-orchard', sha: BASE_SHA_PLACEHOLDER });
-    expect(plan[3]!.body).toEqual({ message: proposal.commitMessage, content: utf8ToBase64(proposal.markdown), branch: 'canon/the-glass-orchard' });
-    expect(plan[3]!.body).not.toHaveProperty('sha');
-    expect(plan[4]!.body).toEqual({ title: proposal.prTitle, head: 'canon/the-glass-orchard', base: 'main', body: proposal.prBody, draft: true });
+    expect(plan[1]!.body).toBeNull();
+    expect(plan[2]!.body).toBeNull();
+    expect(plan[3]!.body).toEqual({ ref: 'refs/heads/canon/the-glass-orchard', sha: BASE_SHA_PLACEHOLDER });
+    expect(plan[5]!.body).toEqual({ message: proposal.commitMessage, content: utf8ToBase64(proposal.markdown), branch: 'canon/the-glass-orchard' });
+    expect(plan[5]!.body).not.toHaveProperty('sha');
+    expect(plan[6]!.body).toEqual({ title: proposal.prTitle, head: 'canon/the-glass-orchard', base: 'main', body: proposal.prBody, draft: true });
     expect(plan.every((c) => c.purpose.length > 0)).toBe(true);
   });
 
   it('starts with a default branch lookup when base is omitted', () => {
     const plan = planCanonPr(proposal, target);
-    expect(plan.map((c) => c.step)).toEqual(['get-repo', 'get-base-ref', 'create-branch', 'check-file', 'put-file', 'open-pr']);
+    expect(plan.map((c) => c.step)).toEqual(['get-repo', 'find-pr', 'check-branch', 'get-base-ref', 'create-branch', 'check-file', 'put-file', 'open-pr']);
     expect(plan[0]!.path).toBe('/repos/Arcanea-Labs/arcanea-ai-app');
-    expect(plan[1]!.path).toBe(`/repos/Arcanea-Labs/arcanea-ai-app/git/ref/heads/${DEFAULT_BRANCH_PLACEHOLDER}`);
-    expect(plan[5]!.body).toMatchObject({ base: DEFAULT_BRANCH_PLACEHOLDER, draft: true });
+    expect(plan[3]!.path).toBe(`/repos/Arcanea-Labs/arcanea-ai-app/git/ref/heads/${DEFAULT_BRANCH_PLACEHOLDER}`);
+    expect(plan[7]!.body).toMatchObject({ base: DEFAULT_BRANCH_PLACEHOLDER, draft: true });
   });
 
   it('URL-encodes path segments of the base branch', () => {
     const plan = planCanonPr(proposal, { ...target, base: 'release/v1.2' });
-    expect(plan[0]!.path).toBe('/repos/Arcanea-Labs/arcanea-ai-app/git/ref/heads/release/v1.2');
+    expect(plan[2]!.path).toBe('/repos/Arcanea-Labs/arcanea-ai-app/git/ref/heads/release/v1.2');
     const odd = planCanonPr(proposal, { ...target, base: 'a_b/c-d' });
-    expect(odd[0]!.path.endsWith('/git/ref/heads/a_b/c-d')).toBe(true);
+    expect(odd[2]!.path.endsWith('/git/ref/heads/a_b/c-d')).toBe(true);
   });
 
   it('requires owner and repo and a plain base', () => {
@@ -184,16 +192,20 @@ describe('openCanonPr', () => {
     const tokens = tokenSource();
     const result = await openCanonPr(proposal, { ...target, base: 'main', getToken: tokens.getToken, fetch: gh.fetch });
 
-    expect(gh.calls.map((c) => c.step)).toEqual(['get-base-ref', 'create-branch', 'check-file', 'put-file', 'open-pr']);
-    expect(gh.calls.map((c) => c.method)).toEqual(['GET', 'POST', 'GET', 'PUT', 'POST']);
-    expect(gh.calls[0]!.url).toBe('https://api.github.com/repos/Arcanea-Labs/arcanea-ai-app/git/ref/heads/main');
-    expect(gh.calls[1]!.body).toEqual({ ref: 'refs/heads/canon/the-glass-orchard', sha: SHA });
-    expect(gh.calls[2]!.url).toBe('https://api.github.com/repos/Arcanea-Labs/arcanea-ai-app/contents/.arcanea/lore/proposals/2026-03-14-the-glass-orchard.md?ref=canon%2Fthe-glass-orchard');
-    const put = gh.calls[3]!;
+    // The guard reads the real default branch itself before the first write (it was not looked up because base was given).
+    expect(gh.calls.map((c) => c.step)).toEqual(['find-pr', 'check-branch', 'get-base-ref', 'get-repo', 'create-branch', 'check-file', 'put-file', 'open-pr']);
+    expect(gh.calls.map((c) => c.method)).toEqual(['GET', 'GET', 'GET', 'GET', 'POST', 'GET', 'PUT', 'POST']);
+    const byStep = (step: Step) => gh.calls.find((c) => c.step === step)!;
+    expect(byStep('find-pr').url).toBe('https://api.github.com/repos/Arcanea-Labs/arcanea-ai-app/pulls?state=open&head=Arcanea-Labs%3Acanon%2Fthe-glass-orchard&per_page=100');
+    expect(byStep('check-branch').url).toBe('https://api.github.com/repos/Arcanea-Labs/arcanea-ai-app/git/ref/heads/canon/the-glass-orchard');
+    expect(byStep('get-base-ref').url).toBe('https://api.github.com/repos/Arcanea-Labs/arcanea-ai-app/git/ref/heads/main');
+    expect(byStep('create-branch').body).toEqual({ ref: 'refs/heads/canon/the-glass-orchard', sha: SHA });
+    expect(byStep('check-file').url).toBe('https://api.github.com/repos/Arcanea-Labs/arcanea-ai-app/contents/.arcanea/lore/proposals/2026-03-14-the-glass-orchard.md?ref=canon%2Fthe-glass-orchard');
+    const put = byStep('put-file');
     expect(put.body).toEqual({ message: proposal.commitMessage, content: utf8ToBase64(proposal.markdown), branch: 'canon/the-glass-orchard' });
     expect(put.body).not.toHaveProperty('sha');
     expect(decodeBase64Utf8(put.body!.content as string)).toBe(proposal.markdown);
-    expect(gh.calls[4]!.body).toEqual({ title: proposal.prTitle, head: 'canon/the-glass-orchard', base: 'main', body: proposal.prBody, draft: true });
+    expect(byStep('open-pr').body).toEqual({ title: proposal.prTitle, head: 'canon/the-glass-orchard', base: 'main', body: proposal.prBody, draft: true });
 
     for (const call of gh.calls) {
       expect(call.headers).toMatchObject({
@@ -215,19 +227,21 @@ describe('openCanonPr', () => {
         step: c.step,
         method: c.method,
         path: c.path,
-        status: [200, 201, 404, 201, 201][i],
+        status: [200, 404, 200, 201, 404, 201, 201][i],
         purpose: c.purpose,
       })),
+      reused: false,
     });
   });
 
   it('looks up the default branch when base is omitted', async () => {
     const gh = github();
     const result = await openCanonPr(proposal, { ...target, getToken: () => TOKEN, fetch: gh.fetch });
-    expect(gh.calls.map((c) => c.step)).toEqual(['get-repo', 'get-base-ref', 'create-branch', 'check-file', 'put-file', 'open-pr']);
+    // The guard reuses the default branch and the 404 it saw on the way, so no extra request.
+    expect(gh.calls.map((c) => c.step)).toEqual(['get-repo', 'find-pr', 'check-branch', 'get-base-ref', 'create-branch', 'check-file', 'put-file', 'open-pr']);
     expect(gh.calls[0]!.url).toBe('https://api.github.com/repos/Arcanea-Labs/arcanea-ai-app');
-    expect(gh.calls[1]!.url).toBe('https://api.github.com/repos/Arcanea-Labs/arcanea-ai-app/git/ref/heads/trunk');
-    expect(gh.calls[5]!.body).toMatchObject({ head: 'canon/the-glass-orchard', base: 'trunk', draft: true });
+    expect(gh.calls[3]!.url).toBe('https://api.github.com/repos/Arcanea-Labs/arcanea-ai-app/git/ref/heads/trunk');
+    expect(gh.calls[7]!.body).toMatchObject({ head: 'canon/the-glass-orchard', base: 'trunk', draft: true });
     expect(result.prNumber).toBe(42);
   });
 
@@ -235,7 +249,7 @@ describe('openCanonPr', () => {
     for (const apiBaseUrl of ['https://api.github.com', 'https://api.github.com/']) {
       const gh = github();
       await openCanonPr(proposal, { ...target, base: 'main', getToken: () => TOKEN, fetch: gh.fetch, apiBaseUrl });
-      expect(gh.calls[0]!.url).toBe('https://api.github.com/repos/Arcanea-Labs/arcanea-ai-app/git/ref/heads/main');
+      expect(gh.calls.find((c) => c.step === 'get-base-ref')!.url).toBe('https://api.github.com/repos/Arcanea-Labs/arcanea-ai-app/git/ref/heads/main');
     }
   });
 
@@ -272,7 +286,7 @@ describe('openCanonPr', () => {
   it('sends every request with redirect manual and a timeout signal', async () => {
     const gh = github();
     await openCanonPr(proposal, { ...target, getToken: () => TOKEN, fetch: gh.fetch });
-    expect(gh.calls).toHaveLength(6);
+    expect(gh.calls).toHaveLength(8);
     for (const call of gh.calls) {
       expect(call.redirect).toBe('manual');
       expect(call.signal).toBeInstanceOf(AbortSignal);
@@ -340,10 +354,11 @@ describe('openCanonPr', () => {
     const gh = github({ 'create-branch': drop });
     const error = await caught(openCanonPr(proposal, { ...target, getToken: () => TOKEN, fetch: gh.fetch }));
     expect(error).toMatchObject({ code: 'NETWORK_ERROR', step: 'create-branch', branch: 'canon/the-glass-orchard', path: proposal.path });
-    expect(error.calls!.map((c) => c.step)).toEqual(['get-repo', 'get-base-ref']);
+    expect(error.calls!.map((c) => c.step)).toEqual(['get-repo', 'find-pr', 'check-branch', 'get-base-ref']);
     expect(error.message).toContain('Branch canon/the-glass-orchard may have been created anyway');
-    expect(error.message).toContain('retry with a different slug');
-    expect(gh.calls.map((c) => c.step)).toEqual(['get-repo', 'get-base-ref', 'create-branch']);
+    expect(error.message).toContain('Retrying openCanonPr with the same proposal is safe');
+    expect(error.message).not.toContain('different slug');
+    expect(gh.calls.map((c) => c.step)).toEqual(['get-repo', 'find-pr', 'check-branch', 'get-base-ref', 'create-branch']);
   });
 
   it('reports the branch as possibly created when create-branch times out', async () => {
@@ -353,7 +368,7 @@ describe('openCanonPr', () => {
     const gh = github({ 'create-branch': hang });
     const error = await caught(openCanonPr(proposal, { ...target, base: 'main', getToken: () => TOKEN, fetch: gh.fetch, timeoutMs: 20 }));
     expect(error).toMatchObject({ code: 'TIMEOUT', step: 'create-branch', branch: 'canon/the-glass-orchard', path: proposal.path });
-    expect(error.calls!.map((c) => c.step)).toEqual(['get-base-ref']);
+    expect(error.calls!.map((c) => c.step)).toEqual(['find-pr', 'check-branch', 'get-base-ref']);
     expect(error.message).toContain('may have been created anyway');
   });
 
@@ -361,9 +376,9 @@ describe('openCanonPr', () => {
     const gh = github({ 'create-branch': { status, json: { message: 'Server Error' } } });
     const error = await caught(openCanonPr(proposal, { ...target, getToken: () => TOKEN, fetch: gh.fetch }));
     expect(error).toMatchObject({ code: 'HTTP_ERROR', step: 'create-branch', status, githubMessage: 'Server Error', branch: 'canon/the-glass-orchard', path: proposal.path });
-    expect(error.calls!.map((c) => c.step)).toEqual(['get-repo', 'get-base-ref', 'create-branch']);
+    expect(error.calls!.map((c) => c.step)).toEqual(['get-repo', 'find-pr', 'check-branch', 'get-base-ref', 'create-branch']);
     expect(error.message).toContain('Branch canon/the-glass-orchard may have been created anyway');
-    expect(gh.calls.map((c) => c.step)).toEqual(['get-repo', 'get-base-ref', 'create-branch']);
+    expect(gh.calls.map((c) => c.step)).toEqual(['get-repo', 'find-pr', 'check-branch', 'get-base-ref', 'create-branch']);
   });
 
   it('does not report a branch for an HTTP refusal of create-branch', async () => {
@@ -374,16 +389,17 @@ describe('openCanonPr', () => {
   });
 
   it.each([
-    ['check-file', { status: 200, json: { sha: 'b'.repeat(40) } }, 'FILE_EXISTS', ['get-repo', 'get-base-ref', 'create-branch', 'check-file']],
-    ['put-file', { status: 409, json: { message: 'Conflict' } }, 'HTTP_ERROR', ['get-repo', 'get-base-ref', 'create-branch', 'check-file', 'put-file']],
-    ['open-pr', { status: 422, json: { message: 'Validation Failed' } }, 'HTTP_ERROR', ['get-repo', 'get-base-ref', 'create-branch', 'check-file', 'put-file', 'open-pr']],
+    ['check-file', { status: 200, json: { sha: 'b'.repeat(40) } }, 'FILE_EXISTS', ['get-repo', 'find-pr', 'check-branch', 'get-base-ref', 'create-branch', 'check-file']],
+    ['put-file', { status: 409, json: { message: 'Conflict' } }, 'HTTP_ERROR', ['get-repo', 'find-pr', 'check-branch', 'get-base-ref', 'create-branch', 'check-file', 'put-file']],
+    ['open-pr', { status: 422, json: { message: 'Validation Failed' } }, 'HTTP_ERROR', ['get-repo', 'find-pr', 'check-branch', 'get-base-ref', 'create-branch', 'check-file', 'put-file', 'open-pr']],
   ] as const)('reports the leftover branch when %s fails after the branch was created', async (step, reply, code, steps) => {
     const gh = github({ [step]: reply });
     const error = await caught(openCanonPr(proposal, { ...target, getToken: () => TOKEN, fetch: gh.fetch }));
     expect(error).toMatchObject({ code, step, branch: 'canon/the-glass-orchard', path: proposal.path });
     expect(error.calls!.map((c) => c.step)).toEqual(steps);
     expect(error.message).toContain('Branch canon/the-glass-orchard was left in place');
-    expect(error.message).toContain('retry with a different slug');
+    expect(error.message).toContain('A retry with the same proposal returns the PR if one was opened');
+    expect(error.message).not.toContain('different slug');
     expect(gh.calls.some((c) => c.method === 'DELETE')).toBe(false);
   });
 
@@ -416,11 +432,22 @@ describe('openCanonPr', () => {
       .toMatchObject({ code: 'INVALID_RESPONSE', step: 'open-pr', branch: 'canon/the-glass-orchard' });
   });
 
-  it('stops with BRANCH_EXISTS on 422 and never reuses the branch', async () => {
+  it('stops with BRANCH_EXISTS on 422 "Reference already exists" and never reuses the branch', async () => {
     const gh = github({ 'create-branch': { status: 422, json: { message: 'Reference already exists' } } });
     const error = await caught(openCanonPr(proposal, { ...target, base: 'main', getToken: () => TOKEN, fetch: gh.fetch }));
     expect(error).toMatchObject({ code: 'BRANCH_EXISTS', step: 'create-branch', status: 422, githubMessage: 'Reference already exists' });
-    expect(gh.calls.map((c) => c.step)).toEqual(['get-base-ref', 'create-branch']);
+    expect(gh.calls.map((c) => c.step)).toEqual(['find-pr', 'check-branch', 'get-base-ref', 'get-repo', 'create-branch']);
+  });
+
+  it.each([
+    ['Object does not exist'],
+    ['Reference update failed'],
+    ['Validation Failed'],
+  ])('labels a 422 %j on ref creation BRANCH_REF_INVALID, not BRANCH_EXISTS', async (message) => {
+    const gh = github({ 'create-branch': { status: 422, json: { message } } });
+    const error = await caught(openCanonPr(proposal, { ...target, base: 'main', getToken: () => TOKEN, fetch: gh.fetch }));
+    expect(error).toMatchObject({ code: 'BRANCH_REF_INVALID', step: 'create-branch', status: 422, githubMessage: message });
+    expect(error.message).toContain('no branch was created');
   });
 
   it('stops with FILE_EXISTS when the file is already there, with no PUT', async () => {
@@ -528,5 +555,87 @@ describe('utf8ToBase64', () => {
     expect(b64).toMatch(/^[A-Za-z0-9+/]*={0,2}$/);
     expect(decodeBase64Utf8(b64)).toBe(text);
     expect(b64).toBe(Buffer.from(text, 'utf8').toString('base64'));
+  });
+});
+
+describe('only builder output is accepted (no spoofed PR text)', () => {
+  const approval = '\n| 2026-03-14 | Everything | ✅ LOCKED | Frank |\n';
+  it.each([
+    ['a copy with an added approval row in prBody', () => ({ ...proposal, prBody: `${proposal.prBody}${approval}` })],
+    ['a copy with an added approval row in markdown', () => ({ ...proposal, markdown: `${proposal.markdown}${approval}` })],
+    ['an exact copy', () => ({ ...proposal })],
+    ['a hand-written object', () => ({
+      slug: 'x', date: '2026-03-14', path: '.arcanea/lore/proposals/2026-03-14-x.md', branch: 'canon/x',
+      markdown: '# Approved by Frank', commitMessage: 'm', prTitle: 't', prBody: 'b',
+    })],
+  ])('refuses %s before the token or any request', async (_label, make) => {
+    const gh = github();
+    const tokens = tokenSource();
+    const error = await caught(openCanonPr(make() as never, { ...target, getToken: tokens.getToken, fetch: gh.fetch }));
+    expect(error).toMatchObject({ code: 'INVALID_OPTIONS', step: 'setup' });
+    expect(error.message).toContain('buildCanonProposal');
+    expect(tokens.count).toBe(0);
+    expect(gh.calls).toHaveLength(0);
+    expect(() => planCanonPr(make() as never, target)).toThrow(CanonPrError);
+  });
+
+  it('cannot be mutated after it is built', () => {
+    expect(() => { (proposal as { prBody: string }).prBody = 'Approved'; }).toThrow(TypeError);
+  });
+});
+
+describe('idempotency per proposal', () => {
+  const openPr = (n: number, branch = 'canon/the-glass-orchard', fullName = 'Arcanea-Labs/arcanea-ai-app') => ({
+    number: n,
+    html_url: `https://github.com/${fullName}/pull/${n}`,
+    head: { ref: branch, repo: { full_name: fullName } },
+  });
+
+  it('returns the open PR an earlier run opened, and writes nothing', async () => {
+    const gh = github({ 'find-pr': { status: 200, json: [openPr(41)] } });
+    const result = await openCanonPr(proposal, { ...target, getToken: () => TOKEN, fetch: gh.fetch });
+    expect(result).toMatchObject({ prNumber: 41, prUrl: 'https://github.com/Arcanea-Labs/arcanea-ai-app/pull/41', reused: true, branch: 'canon/the-glass-orchard' });
+    expect(gh.calls.map((c) => c.step)).toEqual(['get-repo', 'find-pr']);
+    expect(gh.calls.some((c) => c.method !== 'GET')).toBe(false);
+  });
+
+  it('ignores listed PRs from other branches or forks', async () => {
+    const gh = github({ 'find-pr': { status: 200, json: [openPr(5, 'canon/other'), openPr(6, 'canon/the-glass-orchard', 'someone/arcanea-ai-app')] } });
+    const result = await openCanonPr(proposal, { ...target, getToken: () => TOKEN, fetch: gh.fetch });
+    expect(result).toMatchObject({ prNumber: 42, reused: false });
+  });
+
+  it('refuses a matching listed PR with a foreign URL', async () => {
+    const gh = github({ 'find-pr': { status: 200, json: [{ ...openPr(41), html_url: 'https://evil.example/pull/41' }] } });
+    expect(await caught(openCanonPr(proposal, { ...target, getToken: () => TOKEN, fetch: gh.fetch })))
+      .toMatchObject({ code: 'INVALID_RESPONSE', step: 'find-pr' });
+    expect(gh.calls.some((c) => c.method !== 'GET')).toBe(false);
+  });
+
+  it('refuses a non-list find-pr answer', async () => {
+    const gh = github({ 'find-pr': { status: 200, json: { message: 'nope' } } });
+    expect(await caught(openCanonPr(proposal, { ...target, getToken: () => TOKEN, fetch: gh.fetch })))
+      .toMatchObject({ code: 'INVALID_RESPONSE', step: 'find-pr' });
+  });
+
+  it('stops with BRANCH_EXISTS, writing nothing, when the branch exists without an open PR', async () => {
+    const gh = github({ 'check-branch': { status: 200, json: { ref: 'refs/heads/canon/the-glass-orchard', object: { sha: SHA } } } });
+    const error = await caught(openCanonPr(proposal, { ...target, getToken: () => TOKEN, fetch: gh.fetch }));
+    expect(error).toMatchObject({ code: 'BRANCH_EXISTS', step: 'check-branch', branch: 'canon/the-glass-orchard' });
+    expect(gh.calls.map((c) => c.step)).toEqual(['get-repo', 'find-pr', 'check-branch']);
+    expect(gh.calls.some((c) => c.method !== 'GET')).toBe(false);
+  });
+
+  it('after an ambiguous create-branch failure, a retry finds the PR instead of opening a second one', async () => {
+    // Run 1: the branch and PR were created on GitHub, but the client lost the open-pr response.
+    const drop = async (): Promise<ResponseLike> => { throw new Error('connection reset'); };
+    const first = github({ 'open-pr': drop });
+    const error = await caught(openCanonPr(proposal, { ...target, getToken: () => TOKEN, fetch: first.fetch }));
+    expect(error).toMatchObject({ code: 'NETWORK_ERROR', step: 'open-pr' });
+    // Run 2: GitHub now lists the PR from run 1.
+    const second = github({ 'find-pr': { status: 200, json: [openPr(42)] } });
+    const result = await openCanonPr(proposal, { ...target, getToken: () => TOKEN, fetch: second.fetch });
+    expect(result).toMatchObject({ prNumber: 42, reused: true });
+    expect(second.calls.filter((c) => c.method === 'POST')).toHaveLength(0);
   });
 });

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { WorldNode } from '@starlight-agent-canvas/world';
 import { CanonProposalError } from './errors.js';
 import { canonProposalRequestFromRow } from './from-row.js';
-import { buildCanonProposal } from './proposal.js';
+import { buildCanonProposal, proposalSlug } from './proposal.js';
 
 /** Shape of L2's CanonProposalRow as world-agent.ts proposeCanon inserts it and store.ts listProposals returns it. */
 const row = {
@@ -20,11 +20,12 @@ const row = {
 };
 
 const T0 = '2026-01-01T00:00:00.000Z';
-function node(id: string): WorldNode {
+function node(id: string, overrides: Partial<WorldNode> = {}): WorldNode {
   return {
     id, worldId: 'testland', kind: 'place', title: `Node ${id}`, summary: '', body: '', tags: [],
     canon: { status: 'proposed' }, media: [], position: { x: 0, y: 0 }, regionId: null, layer: 0,
     createdBy: { harness: 'claude', at: T0 }, updatedAt: T0, version: 2, meta: {},
+    ...overrides,
   };
 }
 
@@ -47,6 +48,8 @@ describe('canonProposalRequestFromRow', () => {
       rationale: 'The orchard and its keeper recur across three drafts.',
       proposer: { harness: 'claude', actor: 'svc-claude' },
       date: '2026-11-25',
+      proposalId: 'cp_canon_0833jf26tji',
+      worldVersion: 12,
     });
   });
 
@@ -68,8 +71,48 @@ describe('canonProposalRequestFromRow', () => {
   it('feeds buildCanonProposal', () => {
     const request = canonProposalRequestFromRow(row, { worldId: 'testland' });
     const built = buildCanonProposal(request, [node('n_orchard'), node('n_keeper')]);
-    expect(built.path).toBe('.arcanea/lore/proposals/2026-11-25-the-glass-orchard.md');
-    expect(built.branch).toBe('canon/the-glass-orchard');
+    const slug = proposalSlug('cp_canon_0833jf26tji');
+    expect(slug).toMatch(/^proposal-cp-canon-0833jf26tji-[0-9a-f]{8}$/);
+    expect(built.path).toBe(`.arcanea/lore/proposals/2026-11-25-${slug}.md`);
+    expect(built.branch).toBe(`canon/${slug}`);
+    expect(built.markdown).toContain('| Proposal Id | `cp_canon_0833jf26tji` |');
+    expect(built.markdown).toContain('| World Version At Proposal | 12 |');
+  });
+
+  it('derives the same branch for the same row on every run, and different branches for different rows', () => {
+    const a = buildCanonProposal(canonProposalRequestFromRow(row, { worldId: 'testland' }), [node('n_orchard'), node('n_keeper')]);
+    const again = buildCanonProposal(canonProposalRequestFromRow({ ...row, title: 'Renamed later' }, { worldId: 'testland' }), [node('n_orchard'), node('n_keeper')]);
+    const other = buildCanonProposal(canonProposalRequestFromRow({ ...row, id: 'cp-canon-0833jf26tji' }, { worldId: 'testland' }), [node('n_orchard'), node('n_keeper')]);
+    expect(again.branch).toBe(a.branch);
+    expect(other.branch).not.toBe(a.branch);
+  });
+
+  describe('stale proposals (a node changed after propose_canon)', () => {
+    const request = () => canonProposalRequestFromRow(row, { worldId: 'testland' });
+
+    it('builds when every node is proposed and at or below the recorded world version', () => {
+      expect(() => buildCanonProposal(request(), [node('n_orchard', { version: 12 }), node('n_keeper', { version: 3 })])).not.toThrow();
+    });
+
+    it('refuses a node edited after the proposal (back to draft) with STALE_PROPOSAL', () => {
+      expect(codeOf(() => buildCanonProposal(request(), [node('n_orchard', { canon: { status: 'draft' }, version: 13 }), node('n_keeper')]))).toBe('STALE_PROPOSAL');
+    });
+
+    it('refuses a node still proposed but changed after the recorded world version (e.g. moved)', () => {
+      let caught: unknown;
+      try {
+        buildCanonProposal(request(), [node('n_orchard'), node('n_keeper', { version: 13 })]);
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toMatchObject({ code: 'STALE_PROPOSAL', nodeId: 'n_keeper' });
+      expect((caught as Error).message).toContain('world version 12');
+    });
+
+    it('refuses a draft node even without a recorded world version', () => {
+      const { worldVersion: _v, proposalId: _p, ...direct } = request();
+      expect(codeOf(() => buildCanonProposal(direct, [node('n_orchard', { canon: { status: 'draft' } }), node('n_keeper')]))).toBe('STALE_PROPOSAL');
+    });
   });
 
   it('refuses rows that name edges instead of dropping them', () => {
