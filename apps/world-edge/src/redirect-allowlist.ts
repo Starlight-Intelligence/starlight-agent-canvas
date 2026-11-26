@@ -14,7 +14,8 @@
  *     userinfo (https://chatgpt.com/connector/oauth/* matches
  *     https://chatgpt.com/connector/oauth/abc123, not .../oauth or .../oauthx);
  *   - the literal token "loopback", which allows
- *     http://localhost[:port]/callback and http://127.0.0.1[:port]/callback,
+ *     http://localhost[:port]/callback, http://127.0.0.1[:port]/callback and
+ *     http://[::1][:port]/callback,
  *     optionally with one more /<callback_id> segment.
  *
  * Neither an entry nor a candidate may contain "?" or "#" at all.
@@ -27,6 +28,9 @@ export type RedirectAllowEntry =
   | { kind: 'exact'; uri: string }
   | { kind: 'prefix'; origin: string; path: string }
   | { kind: 'loopback' };
+
+/** URL.hostname keeps the brackets of an IPv6 literal. */
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 
 /** One path segment of unreserved characters: no percent escapes, no dots-only tricks beyond what URL parsing removed. */
 const SEGMENT = /^[A-Za-z0-9._~-]+$/;
@@ -85,7 +89,7 @@ function matchesEntry(entry: RedirectAllowEntry, uri: string, url: URL): boolean
       return rest.every((segment) => SEGMENT.test(segment));
     }
     case 'loopback': {
-      if (url.protocol !== 'http:' || (url.hostname !== 'localhost' && url.hostname !== '127.0.0.1') || url.search) return false;
+      if (url.protocol !== 'http:' || !LOOPBACK_HOSTS.has(url.hostname) || url.search) return false;
       if (url.pathname === '/callback') return true;
       const match = /^\/callback\/([^/]+)$/.exec(url.pathname);
       return match !== null && SEGMENT.test(match[1]!);

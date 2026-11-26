@@ -73,6 +73,9 @@ describe('redirect allowlist', () => {
       'http://127.0.0.1:52000/callback',
       'http://localhost/callback',
       'http://127.0.0.1:1455/callback/abc123',
+      'http://[::1]:3118/callback',
+      'http://[::1]/callback',
+      'http://[::1]:1455/callback/abc123',
     ]) expect(isRedirectAllowed(uri, withLoopback), uri).toBe(true);
     for (const uri of [
       'https://localhost:3118/callback',
@@ -82,7 +85,10 @@ describe('redirect allowlist', () => {
       'http://localhost:3118/callback?x=1',
       'http://localhost.evil.com:3118/callback',
       'http://127.0.0.2:3118/callback',
-      'http://[::1]:3118/callback',
+      'https://[::1]:3118/callback',
+      'http://[::1]:3118/callbacks',
+      'http://[::2]:3118/callback',
+      'http://[::1]:3118/callback?x=1',
       'http://evil.com/callback',
       'http://user@localhost:3118/callback',
       'http://localhost/callback?',

@@ -184,7 +184,7 @@ curl -s https://<host>/.well-known/oauth-authorization-server
 
 Expected (verified (code) against the test origin):
 
-- Status 401 and `www-authenticate: Bearer realm="OAuth", resource_metadata="https://<host>/.well-known/oauth-protected-resource/mcp", scope="world:read world:write"`. With a bad token the header also carries `error="invalid_token"`.
+- Status 401 and `www-authenticate: Bearer realm="OAuth", resource_metadata="https://<host>/.well-known/oauth-protected-resource/mcp", scope="world:read world:write world:propose"`. With a bad token the header also carries `error="invalid_token"`.
 - Both protected resource documents include `"resource": "https://<host>/mcp"`, `"authorization_servers": ["https://<host>"]` and `"scopes_supported": ["world:read", "world:write", "world:propose"]`.
 - The authorization server metadata includes `"issuer": "https://<host>"` (identical to the `authorization_servers` entry), `authorization_endpoint` `https://<host>/authorize`, `token_endpoint` `https://<host>/token`, `registration_endpoint` `https://<host>/register`, `code_challenge_methods_supported: ["S256"]`, `authorization_response_iss_parameter_supported: true`, `client_id_metadata_document_supported: true`, `token_endpoint_auth_methods_supported` containing `none` and `private_key_jwt`, and `scopes_supported` with all three world scopes.
 - `/.well-known/openid-configuration` answers 404. The library serves RFC 8414 metadata only, which MCP accepts.
