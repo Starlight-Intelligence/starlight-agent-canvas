@@ -10,6 +10,9 @@ import { parsePublicOrigin, principalFromVerifiedContext, resolveOAuth } from '.
 import { isRedirectAllowed, parseRedirectAllowlist } from '../src/redirect-allowlist.js';
 import { testEnv, worldName } from './helpers.js';
 import { signingKey } from './oauth-helpers.js';
+import envSource from '../src/env.ts?raw';
+import wranglerTestText from './wrangler.test.jsonc?raw';
+import wranglerText from '../wrangler.jsonc?raw';
 
 const DEFAULT_ALLOWLIST = 'https://chatgpt.com/connector_platform_oauth_redirect https://chatgpt.com/connector/oauth/* https://claude.ai/api/mcp/auth_callback';
 
@@ -353,5 +356,121 @@ describe('verifyRs256Jwt failures are AuthErrors', () => {
     // Another URL has its own window.
     await failure(verifyRs256Jwt(await known.sign(claims(), { kid: 'bogus-x' }), { jwksUrl: 'https://other-keys.test/jwks', label: 'Test token', fetcher, now: t0 + 31_002 }));
     expect(fetches).toBe(5);
+  });
+
+  /** A fetcher that answers after a short delay, so concurrent callers overlap, and counts calls. */
+  function slowFetcher(keys: () => JsonWebKey[] | Error) {
+    const counter = { calls: 0 };
+    const fetcher: JwksFetcher = async () => {
+      counter.calls += 1;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const result = keys();
+      if (result instanceof Error) throw result;
+      return { keys: result };
+    };
+    return { fetcher, counter };
+  }
+
+  it('concurrent requests share one JWKS fetch, cold or forced by an unknown kid', async () => {
+    const known = await signingKey();
+    const rotated = await signingKey();
+    let published: JsonWebKey[] = [known.jwk];
+    const { fetcher, counter } = slowFetcher(() => published);
+    const t0 = Date.now();
+    const verify = async (key: typeof known, at: number) =>
+      verifyRs256Jwt(await key.sign(claims()), { jwksUrl: JWKS, label: 'Test token', fetcher, now: at });
+
+    // Cold cache: 20 concurrent verifications, one fetch.
+    await Promise.all(Array.from({ length: 20 }, () => verify(known, t0)));
+    expect(counter.calls).toBe(1);
+    // Rotation: 20 concurrent tokens with the new kid share one forced fetch, and all verify.
+    published = [known.jwk, rotated.jwk];
+    const results = await Promise.all(Array.from({ length: 20 }, () => verify(rotated, t0 + 1000)));
+    expect(results).toHaveLength(20);
+    expect(counter.calls).toBe(2);
+  });
+
+  it('20 concurrent made-up kids cause one forced fetch', async () => {
+    const known = await signingKey();
+    const { fetcher, counter } = slowFetcher(() => [known.jwk]);
+    const t0 = Date.now();
+    await verifyRs256Jwt(await known.sign(claims()), { jwksUrl: JWKS, label: 'Test token', fetcher, now: t0 });
+    const bogus = await Promise.all(Array.from({ length: 20 }, (_, i) => known.sign(claims(), { kid: `bogus-${i}` })));
+    const errors = await Promise.all(bogus.map((token) => failure(verifyRs256Jwt(token, { jwksUrl: JWKS, label: 'Test token', fetcher, now: t0 + 1000 }))));
+    expect(errors.every((e) => e.status === 401)).toBe(true);
+    expect(counter.calls).toBe(2);
+  });
+
+  it('a failed forced fetch starts the 30 second window too', async () => {
+    const known = await signingKey();
+    let down = false;
+    const { fetcher, counter } = slowFetcher(() => (down ? new TypeError('network down') : [known.jwk]));
+    const t0 = Date.now();
+    await verifyRs256Jwt(await known.sign(claims()), { jwksUrl: JWKS, label: 'Test token', fetcher, now: t0 });
+    down = true;
+    const first = await failure(verifyRs256Jwt(await known.sign(claims(), { kid: 'bogus-a' }), { jwksUrl: JWKS, label: 'Test token', fetcher, now: t0 + 1000 }));
+    expect(first.status).toBe(503);
+    expect(counter.calls).toBe(2);
+    for (let i = 0; i < 10; i++) {
+      const later = await failure(verifyRs256Jwt(await known.sign(claims(), { kid: `bogus-b${i}` }), { jwksUrl: JWKS, label: 'Test token', fetcher, now: t0 + 2000 + i * 1000 }));
+      expect(later.status).toBe(401);
+    }
+    expect(counter.calls).toBe(2);
+    // The window over, the next unknown kid tries again.
+    await failure(verifyRs256Jwt(await known.sign(claims(), { kid: 'bogus-c' }), { jwksUrl: JWKS, label: 'Test token', fetcher, now: t0 + 31_001 }));
+    expect(counter.calls).toBe(3);
+  });
+});
+
+/** Parse JSONC: drop line and block comments outside strings, then trailing commas. */
+function parseJsonc(text: string): Record<string, unknown> {
+  let out = '';
+  let inString = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]!;
+    if (inString) {
+      out += c;
+      if (c === '\\') out += text[++i] ?? '';
+      else if (c === '"') inString = false;
+    } else if (c === '"') {
+      inString = true;
+      out += c;
+    } else if (c === '/' && text[i + 1] === '/') {
+      while (i < text.length && text[i] !== '\n') i++;
+      out += '\n';
+    } else if (c === '/' && text[i + 1] === '*') {
+      i = text.indexOf('*/', i + 2) + 1;
+    } else {
+      out += c;
+    }
+  }
+  return JSON.parse(out.replace(/,(\s*[}\]])/g, '$1')) as Record<string, unknown>;
+}
+
+describe('configuration files agree with the code', () => {
+  const config = parseJsonc(wranglerText) as {
+    compatibility_flags: string[];
+    kv_namespaces: { binding: string }[];
+    vars: Record<string, string>;
+    secrets: { required: string[] };
+  };
+  const testConfig = parseJsonc(wranglerTestText) as typeof config;
+
+  it('secrets.required lists exactly the secret fields of Env', () => {
+    const secrets = [...envSource.matchAll(/\/\*\*([\s\S]*?)\*\/\s*([A-Z][A-Z0-9_]*)\??\s*:/g)]
+      .filter((m) => /\bSecret\./.test(m[1]!))
+      .map((m) => m[2]!);
+    expect(secrets.length).toBe(7);
+    expect([...config.secrets.required].sort()).toEqual([...secrets].sort());
+  });
+
+  it('the test config mirrors the OAuth bindings, flags and default allowlist', () => {
+    expect(testConfig.vars.OAUTH_REDIRECT_ALLOWLIST).toBe(config.vars.OAUTH_REDIRECT_ALLOWLIST);
+    expect(config.vars.OAUTH_REDIRECT_ALLOWLIST).toBe(DEFAULT_ALLOWLIST);
+    for (const c of [config, testConfig]) {
+      expect(c.compatibility_flags).toEqual(expect.arrayContaining(['nodejs_compat', 'global_fetch_strictly_public']));
+      expect(c.kv_namespaces.map((k) => k.binding)).toContain('OAUTH_KV');
+    }
+    expect(config.vars).toHaveProperty('PUBLIC_ORIGIN');
   });
 });

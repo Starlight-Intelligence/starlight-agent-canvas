@@ -128,6 +128,7 @@ describe('OAuth discovery', () => {
       const result = await mcp(token, 'tools/list');
       expect(result.status).toBe(401);
       const challenge = result.headers.get('www-authenticate') ?? '';
+      expect(challenge.startsWith(`Bearer realm="OAuth", resource_metadata="${PRM_URL}"`)).toBe(true);
       expect(challenge).toContain(`resource_metadata="${PRM_URL}"`);
       expect(challenge).toContain('scope="world:read world:write"');
       expect(JSON.parse(result.text)).toMatchObject({ error: { code: 'UNAUTHENTICATED' } });
@@ -226,6 +227,7 @@ describe('OAuth code flow through Cloudflare Access', () => {
 
     // Token bound to the resource.
     expect(flow.tokenBody).toMatchObject({ token_type: 'bearer', resource: RESOURCE, scope: 'world:read world:write' });
+    // A refresh token comes back although the client never asked for offline_access.
     expect(flow.tokenBody.refresh_token).toBeTruthy();
 
     const worldId = worldName('oauth-claude');
@@ -253,6 +255,36 @@ describe('OAuth code flow through Cloudflare Access', () => {
     const read = await mcp(flow.token, 'tools/call', { name: 'get_world', arguments: { worldId } });
     expect(read.status).toBe(200);
     const added = await mcp(flow.token, 'tools/call', addNode(worldId));
+    expect(added.tool).toMatchObject({ ok: true, nodes: [{ createdBy: { harness: 'chatgpt', actor: 'writer@example.com' } }] });
+  });
+
+  it("claude.ai with Claude's published identity (CIMD): consent shows claude.ai, add_node as claude-ai", async () => {
+    const clientId = 'https://claude.ai/oauth/mcp-oauth-client-metadata';
+    const cimd = {
+      [clientId]: {
+        client_id: clientId,
+        client_name: 'Claude',
+        redirect_uris: [CLAUDE_AI_CALLBACK],
+        grant_types: ['authorization_code', 'refresh_token', 'urn:ietf:params:oauth:grant-type:jwt-bearer'],
+        token_endpoint_auth_method: 'none',
+      },
+    };
+    const flow = await accessToken({ clientId, redirectUri: CLAUDE_AI_CALLBACK, cimd });
+    expect(flow.upstream.cimdFetches).toContain(clientId);
+    expect(flow.consentHtml).toContain('Published by <strong>claude.ai</strong>');
+    expect(new URL(flow.location).searchParams.get('iss')).toBe(ORIGIN);
+    expect(flow.tokenBody.resource).toBe(RESOURCE);
+    const added = await mcp(flow.token, 'tools/call', addNode(worldName('oauth-claude-cimd')));
+    expect(added.tool).toMatchObject({ ok: true, nodes: [{ createdBy: { harness: 'claude-ai', actor: 'writer@example.com' } }] });
+  });
+
+  it('ChatGPT through dynamic registration with its stable redirect: add_node as chatgpt', async () => {
+    const response = await registerClient({ client_name: 'ChatGPT', redirect_uris: [CHATGPT_REDIRECT] });
+    expect(response.status).toBe(201);
+    const clientId = ((await response.json()) as { client_id: string }).client_id;
+    const flow = await accessToken({ clientId, redirectUri: CHATGPT_REDIRECT });
+    expect(flow.consentHtml).toContain('not verified');
+    const added = await mcp(flow.token, 'tools/call', addNode(worldName('oauth-chatgpt-dcr')));
     expect(added.tool).toMatchObject({ ok: true, nodes: [{ createdBy: { harness: 'chatgpt', actor: 'writer@example.com' } }] });
   });
 
@@ -645,6 +677,21 @@ describe('Token lifetimes and consent defaults', () => {
     expect(lifetime).toBeLessThanOrEqual(7 * 24 * 3600 + 5);
   });
 
+  it('refreshing does not extend the grant: its expiry is the same before and after a refresh', async () => {
+    const clientId = await registerClaudeAi();
+    const flow = await accessToken({ clientId, redirectUri: CLAUDE_AI_CALLBACK });
+    const grantFor = async () => (await kvHelpers().listUserGrants(encodeURIComponent('access-user-1'), { limit: 1000 })).items.find((g) => g.clientId === clientId)!;
+    const before = await grantFor();
+    // Let the clock move so an extension would be visible.
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    const refreshed = await tokenRequest({ grant_type: 'refresh_token', refresh_token: flow.tokenBody.refresh_token as string, client_id: clientId });
+    expect(refreshed.status).toBe(200);
+    expect(refreshed.body.refresh_token).toBeTruthy();
+    const after = await grantFor();
+    expect(after.id).toBe(before.id);
+    expect(after.expiresAt).toBe(before.expiresAt);
+  });
+
   it('pre-ticks only world:read when the client asked for none of our scopes, and what it asked for otherwise', async () => {
     const clientId = await registerClaudeAi();
     const none = await openConsent({ clientId, redirectUri: CLAUDE_AI_CALLBACK, scope: '' });
@@ -847,6 +894,18 @@ describe('Static bearer tokens and OAuth tokens never cross over', () => {
     expect((await SELF.fetch(`${other}/callback?state=x`, { redirect: 'manual' })).status).toBe(404);
     expect((await SELF.fetch(`${other}/token`, { method: 'POST', body: 'grant_type=refresh_token', headers: { 'content-type': 'application/x-www-form-urlencoded' } })).status).toBe(404);
     expect((await SELF.fetch(`${other}/register`, { method: 'POST', body: '{}', headers: { 'content-type': 'application/json' } })).status).toBe(404);
+  });
+
+  it('a valid static service token on a host other than PUBLIC_ORIGIN gets 401 at /mcp', async () => {
+    const init = {
+      method: 'POST',
+      headers: { authorization: `Bearer ${testEnv.TEST_TOKENS.claude}`, 'content-type': 'application/json', accept: 'application/json, text/event-stream', 'mcp-protocol-version': '2025-06-18' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }),
+    };
+    const elsewhere = await SELF.fetch('https://world-edge.acct.workers.dev/mcp', init);
+    expect(elsewhere.status).toBe(401);
+    expect(elsewhere.headers.get('www-authenticate')).toContain('error="invalid_token"');
+    expect((await SELF.fetch(`${ORIGIN}/mcp`, init)).status).toBe(200);
   });
 
   it('an OAuth access token on another host is refused (the audience names the public origin)', async () => {
