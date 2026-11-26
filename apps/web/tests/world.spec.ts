@@ -7,6 +7,12 @@ async function ready(page: Page) {
   await page.waitForFunction(() => Number(document.querySelector('.wc')?.getAttribute('data-total-nodes') ?? 0) > 0);
 }
 
+/** Inspector version badge as a number. Versions come from one world-wide counter, so tests compare, not hard-code. */
+async function inspectorVersion(page: Page): Promise<number> {
+  const text = await page.locator('.wc-inspector .wc-inspector-version').textContent();
+  return Number((text ?? '').replace(/^v/, ''));
+}
+
 test.describe('world canvas', () => {
   test('stress route renders only what is in view out of 10,000 nodes', async ({ page }) => {
     await page.goto('/world/stress?at=3000,2400&zoom=0.6');
@@ -46,10 +52,11 @@ test.describe('world canvas', () => {
     await page.goto('/world/demo?node=n_gen_1');
     await ready(page);
     const inspector = page.getByRole('complementary', { name: 'Inspector' });
-    await expect(inspector.getByText('v1', { exact: true })).toBeVisible();
+    await expect(inspector.locator('.wc-inspector-version')).toHaveText(/^v\d+$/);
+    const before = await inspectorVersion(page);
     await inspector.getByLabel('Summary').fill('A harbor where the sea is glass.');
     await inspector.getByRole('button', { name: 'Save changes' }).click();
-    await expect(inspector.getByText('v2', { exact: true })).toBeVisible();
+    await expect.poll(() => inspectorVersion(page)).toBeGreaterThan(before);
     const activity = page.getByRole('complementary', { name: 'Activity' });
     await expect(activity.getByText('Edited Harbor of glass')).toBeVisible();
     await expect(activity.locator('.wc-act--confirmed .wc-harness', { hasText: 'human' }).first()).toBeVisible();
@@ -145,6 +152,8 @@ test.describe('world canvas', () => {
     await page.goto('/world/demo?node=n_gen_6&zoom=1');
     await ready(page);
     const inspector = page.getByRole('complementary', { name: 'Inspector' });
+    await expect(inspector.locator('.wc-inspector-version')).toHaveText(/^v\d+$/);
+    const before = await inspectorVersion(page);
     await inspector.getByLabel('Summary').fill('Draft that must survive a move');
     const box = await page.locator('.react-flow__node[data-id="n_gen_6"]').boundingBox();
     expect(box).not.toBeNull();
@@ -152,7 +161,8 @@ test.describe('world canvas', () => {
     await page.mouse.down();
     await page.mouse.move(box!.x + 120, box!.y + 60, { steps: 8 });
     await page.mouse.up();
-    await expect(inspector.getByText('v2', { exact: true })).toBeVisible();
+    // The move is accepted when the node gets a newer version.
+    await expect.poll(() => inspectorVersion(page)).toBeGreaterThan(before);
     await expect(inspector.getByLabel('Summary')).toHaveValue('Draft that must survive a move');
   });
 });
