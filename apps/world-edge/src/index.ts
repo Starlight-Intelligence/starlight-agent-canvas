@@ -1,5 +1,5 @@
 import { routeAgentRequest } from 'agents';
-import { AuthError, authenticate, encodePrincipal, PRINCIPAL_HEADER, unauthorized } from './auth.js';
+import { AuthError, authenticate, authenticateMcp, encodePrincipal, PRINCIPAL_HEADER, unauthorized } from './auth.js';
 import type { Env } from './env.js';
 import { handleMcp, MCP_ROUTE } from './mcp.js';
 import { readMedia, receiveUpload, signUpload } from './media.js';
@@ -9,8 +9,8 @@ export { WorldAgent } from './world-agent.js';
 /**
  * Routes:
  *   GET  /health                      no auth
- *   POST /mcp                         MCP (bearer service token or Access)
- *   *    /agents/world-agent/<world>  WorldAgent HTTP + WebSocket (Access or bearer)
+ *   POST /mcp                         MCP (bearer service token only; Access JWTs are ignored)
+ *   *    /agents/world-agent/<world>  WorldAgent HTTP + WebSocket (Access identity or bearer)
  *   POST /media/sign                  signed R2 upload URL (auth)
  *   PUT  /media/upload?...            upload with the signed URL (signature is the credential)
  *   GET  /media/object/<key>          read media (auth)
@@ -30,7 +30,7 @@ export default {
 
     let principal;
     try {
-      principal = await authenticate(clean, env);
+      principal = url.pathname === MCP_ROUTE ? await authenticateMcp(clean, env) : await authenticate(clean, env);
     } catch (error) {
       if (error instanceof AuthError) return Response.json({ error: { code: 'AUTH_UNAVAILABLE', message: error.message } }, { status: error.status });
       throw error;

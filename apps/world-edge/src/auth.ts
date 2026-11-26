@@ -4,12 +4,13 @@ import type { Env } from './env.js';
 
 /**
  * Authenticated caller. Every write records `harness` and `actor` in the
- * ops_log. Built only by `authenticate`; never parsed from client JSON.
+ * ops_log. Built only by `authenticate` or `authenticateMcp`; never parsed
+ * from client JSON.
  */
 export interface Principal {
   /** human for browsers behind Access; claude, codex, chatgpt ... for service tokens. */
   harness: string;
-  /** Stable id: Access email/sub, or the service token name. */
+  /** Stable id: Access identity email, or the service token name. */
   actor: string;
   via: 'access' | 'service-token';
 }
@@ -164,29 +165,43 @@ export async function verifyAccessJwt(
   const aud = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
   if (!aud.includes(env.ACCESS_AUD)) throw new AuthError('Access token audience mismatch.');
 
-  // Service tokens issued by Access carry common_name instead of email.
-  const actor = typeof payload.email === 'string' ? payload.email
-    : typeof payload.common_name === 'string' ? payload.common_name
-      : typeof payload.sub === 'string' ? payload.sub : null;
-  if (!actor) throw new AuthError('Access token has no subject.');
-  return { harness: 'human', actor, via: 'access' };
+  // Only a browser identity (email) is a human. Access also signs a JWT for
+  // requests that carry an Access service token (CF-Access-Client-Id/Secret);
+  // that JWT has common_name and no email. It names no person and no harness,
+  // so it never becomes a principal.
+  if (typeof payload.common_name === 'string' || typeof payload.email !== 'string' || payload.email.length === 0) {
+    throw new AuthError('Access service-token assertions are not accepted; use a bearer token.');
+  }
+  return { harness: 'human', actor: payload.email, via: 'access' };
+}
+
+async function bearerPrincipal(request: Request, env: Env): Promise<Principal | null> {
+  const authorization = request.headers.get('authorization');
+  if (!authorization?.toLowerCase().startsWith('bearer ')) return null;
+  return verifyServiceToken(authorization.slice(7).trim(), env);
 }
 
 /**
- * Resolve the caller. Order: bearer service token (MCP clients), then the
- * Access assertion header (browsers). Returns null when neither is present
- * or valid; callers turn that into 401.
+ * Resolve the caller on /mcp. Only a per-client bearer service token is
+ * accepted. Access JWTs are ignored here, whatever Access policy sits in
+ * front of /mcp. Returns null when the bearer is missing or invalid.
+ */
+export async function authenticateMcp(request: Request, env: Env): Promise<Principal | null> {
+  return bearerPrincipal(request, env);
+}
+
+/**
+ * Resolve the caller on every other authenticated route. Order: bearer
+ * service token, then the Access assertion header of a browser identity.
+ * Returns null when neither is present or valid; callers turn that into 401.
  */
 export async function authenticate(
   request: Request,
   env: Env,
   options: { fetcher?: JwksFetcher; now?: number } = {},
 ): Promise<Principal | null> {
-  const authorization = request.headers.get('authorization');
-  if (authorization?.toLowerCase().startsWith('bearer ')) {
-    const principal = await verifyServiceToken(authorization.slice(7).trim(), env);
-    if (principal) return principal;
-  }
+  const principal = await bearerPrincipal(request, env);
+  if (principal) return principal;
   const assertion = request.headers.get('cf-access-jwt-assertion');
   if (assertion) {
     try {

@@ -14,8 +14,12 @@ Nothing in this directory deploys itself. The first deploy, the Cloudflare Acces
  +--------------------------------------------------------------------+
  | Worker  src/index.ts                                               |
  |  1. drop any client x-world-principal header                       |
- |  2. authenticate: bearer service token (hash in MCP_SERVICE_TOKENS)|
- |     or Access JWT (RS256, team domain certs, AUD check)            |
+ |  2. authenticate:                                                  |
+ |     /mcp: bearer service token only (hash in MCP_SERVICE_TOKENS);  |
+ |           Access JWTs are ignored                                  |
+ |     other routes: bearer service token, or a browser Access        |
+ |           identity JWT with email (RS256, team certs, AUD check);  |
+ |           Access service-token JWTs are rejected                   |
  |  3. route:                                                         |
  |     /mcp            -> createMcpHandler (agents/mcp/server) with   |
  |                        tools from src/mcp.ts, principal in closure |
@@ -85,7 +89,7 @@ Canon is never written here. `applyOps` refuses `canon` in any op, `importGraph`
 | Route | Auth | Notes |
 | --- | --- | --- |
 | `GET /health` | none | liveness |
-| `POST /mcp` | bearer or Access | MCP (stateless Streamable HTTP, Agents SDK `createMcpHandler`) |
+| `POST /mcp` | bearer only | MCP (stateless Streamable HTTP, Agents SDK `createMcpHandler`) |
 | `GET /agents/world-agent/<worldId>` | bearer or Access | world record and counts; WebSocket upgrade for live sync |
 | `GET /agents/world-agent/<worldId>/region?x&y&w&h&level` | bearer or Access | same as `get_region` |
 | `POST /agents/world-agent/<worldId>/ops` | bearer or Access | `{ops: GraphOp[]}`; 409 on `STALE_VERSION` |
@@ -94,6 +98,8 @@ Canon is never written here. `applyOps` refuses `canon` in any op, `importGraph`
 | `POST /media/sign` | bearer or Access | `{worldId, filename, contentType}` gives a 15 minute PUT URL |
 | `PUT /media/upload?...` | signed URL | write-once; content type and uploader are bound into the signature |
 | `GET /media/object/<key>` | bearer or Access | read media |
+
+`bearer` is a per-client service token from `MCP_SERVICE_TOKENS`. `/mcp` takes only that token. It never reads `Cf-Access-Jwt-Assertion`, so an Access JWT of any kind does not authenticate it, and a missing or wrong bearer token gets 401. On the other routes, `Access` means a browser identity JWT with an `email` claim, which maps to harness `human` with the email as actor. A JWT that Access issues for an Access service token (`CF-Access-Client-Id` and `CF-Access-Client-Secret`) has no email and is rejected everywhere.
 
 WebSocket messages from the server: `world.hello` (on connect), `world.diff` (after every accepted batch), plus the Agents SDK state frame with the small summary. Messages to the server: `{id, type: "ops", ops}`, `{id, type: "get_region", query}`, `{id, type: "get_world"}`; replies are `{id, type: "result", result}`. Clients cannot set Agent state directly.
 
@@ -154,9 +160,12 @@ npx wrangler d1 migrations apply world-index --remote
 # 3. Access (dashboard): Zero Trust > Access > Applications > Self-hosted,
 #    domain world-edge.<account>.workers.dev. Copy the AUD tag and team domain
 #    into ACCESS_AUD and ACCESS_TEAM_DOMAIN in wrangler.jsonc.
-#    Add a Bypass or Service Auth rule for /mcp and /media/upload only if MCP
-#    clients must reach the Worker without an Access session; those routes
-#    still require a bearer token or a signed URL.
+#    Add a Bypass rule for /mcp. That is the expected setup: /mcp takes only
+#    a per-client bearer token and ignores Access JWTs. An Access Service Auth
+#    policy on /mcp does not give a caller any access by itself, because the
+#    Worker never accepts the JWT Access adds for an Access service token.
+#    Add a Bypass rule for /media/upload too if uploads come from clients
+#    without an Access session; the signed URL is its credential.
 
 # 4. Secrets (values never go in git)
 npx wrangler secret put MCP_SERVICE_TOKENS   # [{"name":"claude-frank","harness":"claude","sha256":"..."}, ...]
