@@ -1,6 +1,7 @@
 import { createExecutionContext, waitOnExecutionContext } from 'cloudflare:test';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { readAccessOidcConfig } from '../src/access-oidc.js';
+import { AuthError, resetJwksCache, verifyRs256Jwt, type JwksFetcher } from '../src/auth.js';
 import type { Env } from '../src/env.js';
 import { harnessForClient } from '../src/harness.js';
 import worker from '../src/index.js';
@@ -8,6 +9,7 @@ import { mcpHostOptions, TOOL_SCOPES } from '../src/mcp.js';
 import { parsePublicOrigin, principalFromVerifiedContext, resolveOAuth } from '../src/oauth.js';
 import { isRedirectAllowed, parseRedirectAllowlist } from '../src/redirect-allowlist.js';
 import { testEnv, worldName } from './helpers.js';
+import { signingKey } from './oauth-helpers.js';
 
 const DEFAULT_ALLOWLIST = 'https://chatgpt.com/connector_platform_oauth_redirect https://chatgpt.com/connector/oauth/* https://claude.ai/api/mcp/auth_callback';
 
@@ -52,6 +54,11 @@ describe('redirect allowlist', () => {
       'https://claude.com/api/mcp/auth_callback',
       ' https://claude.ai/api/mcp/auth_callback',
       'http://localhost:3000/callback',
+      'https://chatgpt.com/connector/oauth/x?',
+      'https://chatgpt.com/connector/oauth/x#',
+      'https://chatgpt.com/connector/oauth/x?#',
+      'https://chatgpt.com/connector_platform_oauth_redirect?',
+      'https://claude.ai/api/mcp/auth_callback#',
       '',
     ]) expect(isRedirectAllowed(uri, list), uri).toBe(false);
     expect(isRedirectAllowed(42, list)).toBe(false);
@@ -75,6 +82,9 @@ describe('redirect allowlist', () => {
       'http://[::1]:3118/callback',
       'http://evil.com/callback',
       'http://user@localhost:3118/callback',
+      'http://localhost/callback?',
+      'http://localhost/callback#',
+      'http://127.0.0.1:1455/callback/abc?',
     ]) expect(isRedirectAllowed(uri, withLoopback), uri).toBe(false);
   });
 
@@ -83,7 +93,7 @@ describe('redirect allowlist', () => {
       expect(parseRedirectAllowlist(value)).toEqual([]);
       expect(isRedirectAllowed('https://claude.ai/api/mcp/auth_callback', parseRedirectAllowlist(value))).toBe(false);
     }
-    const invalid = parseRedirectAllowlist('http://claude.ai/cb https://x.example:8443/cb https://x.example/cb?q=1 https://x.example/* * https://user@x.example/cb LOOPBACK');
+    const invalid = parseRedirectAllowlist('http://claude.ai/cb https://x.example:8443/cb https://x.example/cb?q=1 https://x.example/cb? https://x.example/cb# https://x.example/a?/* https://x.example/* * https://user@x.example/cb LOOPBACK');
     expect(invalid).toEqual([]);
   });
 });
@@ -264,5 +274,84 @@ describe('createMcpHandler origin options', () => {
       allowedOriginHostnames: ['world.example.com', 'localhost', '127.0.0.1', '[::1]'],
     });
     expect(mcpHostOptions(new URL('https://world-edge.acct.workers.dev/mcp'), 'world.example.com').allowedOriginHostnames).toContain('world-edge.acct.workers.dev');
+  });
+});
+
+describe('verifyRs256Jwt failures are AuthErrors', () => {
+  beforeEach(() => resetJwksCache());
+  const JWKS = 'https://keys.test/jwks';
+  const claims = () => ({ exp: Math.floor(Date.now() / 1000) + 300 });
+
+  async function failure(promise: Promise<unknown>): Promise<AuthError> {
+    const error = await promise.then(() => null, (e: unknown) => e);
+    expect(error).toBeInstanceOf(AuthError);
+    return error as AuthError;
+  }
+
+  it('a signature segment that is not base64url is a 401, not a DOMException', async () => {
+    const key = await signingKey();
+    const token = `${(await key.sign(claims())).split('.').slice(0, 2).join('.')}.@@@`;
+    const fetcher: JwksFetcher = async () => ({ keys: [key.jwk] });
+    expect((await failure(verifyRs256Jwt(token, { jwksUrl: JWKS, label: 'Test token', fetcher }))).status).toBe(401);
+  });
+
+  it('a key WebCrypto refuses for RS256 verification (use, alg, key_ops) is a 401, not a DataError', async () => {
+    for (const patch of [{ use: 'enc' }, { alg: 'RS512' }, { key_ops: ['encrypt'] }, { kty: 'EC' }]) {
+      resetJwksCache();
+      const key = await signingKey();
+      const fetcher: JwksFetcher = async () => ({ keys: [{ ...key.jwk, ...patch } as JsonWebKey] });
+      expect((await failure(verifyRs256Jwt(await key.sign(claims()), { jwksUrl: JWKS, label: 'Test token', fetcher }))).status, JSON.stringify(patch)).toBe(401);
+    }
+  });
+
+  it('a header or payload that is JSON but not an object is a 401', async () => {
+    const enc = (v: unknown) => btoa(JSON.stringify(v)).replace(/=+$/, '');
+    for (const token of [`${enc(null)}.${enc({})}.sig`, `${enc({ alg: 'RS256' })}.${enc([1])}.sig`]) {
+      expect((await failure(verifyRs256Jwt(token, { jwksUrl: JWKS, label: 'Test token', fetcher: async () => ({ keys: [] }) }))).status).toBe(401);
+    }
+  });
+
+  it('keys that cannot be loaded are a 503, whatever the fetcher throws', async () => {
+    const key = await signingKey();
+    const token = await key.sign(claims());
+    for (const fetcher of [
+      async () => { throw new TypeError('network down'); },
+      async () => { throw new SyntaxError('Unexpected token < in JSON'); },
+      async () => { throw new AuthError('Could not load Access signing keys (500).', 503); },
+    ] as JwksFetcher[]) {
+      resetJwksCache();
+      expect((await failure(verifyRs256Jwt(token, { jwksUrl: JWKS, label: 'Test token', fetcher }))).status).toBe(503);
+    }
+  });
+
+  it('an unknown kid forces at most one refetch per JWKS URL per 30 seconds', async () => {
+    const known = await signingKey();
+    const rotated = await signingKey();
+    let published = [known.jwk];
+    let fetches = 0;
+    const fetcher: JwksFetcher = async () => {
+      fetches += 1;
+      return { keys: published };
+    };
+    const t0 = Date.now();
+    const verify = async (key: typeof known, at: number, kid?: string) =>
+      verifyRs256Jwt(await key.sign(claims(), kid ? { kid } : {}), { jwksUrl: JWKS, label: 'Test token', fetcher, now: at });
+
+    await verify(known, t0);
+    expect(fetches).toBe(1);
+    // A made-up kid: one forced refetch, then none for 30 s.
+    await failure(verify(known, t0 + 1000, 'bogus-1'));
+    expect(fetches).toBe(2);
+    for (let i = 0; i < 5; i++) await failure(verify(known, t0 + 2000 + i, `bogus-${i + 2}`));
+    expect(fetches).toBe(2);
+    // A real rotation inside the window waits for it to pass, then is picked up.
+    published = [known.jwk, rotated.jwk];
+    await failure(verify(rotated, t0 + 20_000));
+    expect(fetches).toBe(2);
+    await expect(verify(rotated, t0 + 31_001)).resolves.toBeTruthy();
+    expect(fetches).toBe(3);
+    // Another URL has its own window.
+    await failure(verifyRs256Jwt(await known.sign(claims(), { kid: 'bogus-x' }), { jwksUrl: 'https://other-keys.test/jwks', label: 'Test token', fetcher, now: t0 + 31_002 }));
+    expect(fetches).toBe(5);
   });
 });

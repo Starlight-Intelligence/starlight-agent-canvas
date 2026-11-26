@@ -1,24 +1,28 @@
 import { OAuthProvider, getOAuthApi, type OAuthProviderOptions } from '@cloudflare/workers-oauth-provider';
-import { createExecutionContext, SELF } from 'cloudflare:test';
+import { createExecutionContext, SELF, waitOnExecutionContext } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resetJwksCache } from '../src/auth.js';
 import type { Env } from '../src/env.js';
+import worker from '../src/index.js';
 import { agentFor, testEnv, worldName } from './helpers.js';
 import {
   ACCESS_AUTHORIZATION_URL,
   ACCESS_CLIENT_ID,
   accessClaims,
   approveToAccess,
+  authorizeUrl,
   callback,
   CHATGPT_CIMD,
   CHATGPT_REDIRECT,
   chatgptCimdDocument,
   CLAUDE_AI_CALLBACK,
+  CookieJar,
   mcp,
   mockUpstream,
   openConsent,
   ORIGIN,
   postConsent,
+  randomString,
   registerClient,
   RESOURCE,
   s256,
@@ -32,6 +36,30 @@ beforeEach(() => resetJwksCache());
 afterEach(() => vi.restoreAllMocks());
 
 const PRM_URL = `${ORIGIN}/.well-known/oauth-protected-resource/mcp`;
+
+/** OAuthHelpers on the test KV, for setting up state the public endpoints would refuse. */
+function kvHelpers() {
+  return getOAuthApi({
+    apiRoute: '/mcp', apiHandler: { fetch: async () => new Response() }, defaultHandler: { fetch: async () => new Response() },
+    authorizeEndpoint: `${ORIGIN}/authorize`, tokenEndpoint: `${ORIGIN}/token`, resourceMetadata: { resource: RESOURCE, authorization_servers: [ORIGIN] },
+  }, { ...testEnv, OAUTH_PROVIDER: undefined } as unknown as Env);
+}
+
+/**
+ * Call the Worker's own fetch with a modified env (same KV and Durable
+ * Objects). A changed OAUTH_REDIRECT_ALLOWLIST rebuilds the memoized provider.
+ */
+async function fetchWithEnv(env: Partial<Env>, url: string, init: RequestInit, jar?: CookieJar): Promise<Response> {
+  const ctx = createExecutionContext();
+  const headers = new Headers(init.headers);
+  for (const [k, v] of Object.entries(jar?.header() ?? {})) headers.set(k, v);
+  const response = await worker.fetch(new Request(url, { ...init, headers, redirect: 'manual' }), { ...testEnv, OAUTH_PROVIDER: undefined, ...env } as unknown as Env, ctx);
+  await waitOnExecutionContext(ctx);
+  jar?.absorb(response);
+  return response;
+}
+
+const ONLY_CHATGPT = { OAUTH_REDIRECT_ALLOWLIST: 'https://chatgpt.com/connector_platform_oauth_redirect' };
 
 async function registerClaudeAi(): Promise<string> {
   const response = await registerClient({ client_name: 'Claude', redirect_uris: [CLAUDE_AI_CALLBACK] });
@@ -106,15 +134,17 @@ describe('OAuth discovery', () => {
     }
   });
 
-  it('serves protected resource metadata at the path-specific and root locations', async () => {
+  it('serves protected resource metadata at the path-specific and root locations, with all three scopes', async () => {
     const specific = await SELF.fetch(PRM_URL);
     expect(specific.status).toBe(200);
+    expect(specific.headers.get('content-type')).toContain('application/json');
     const doc = (await specific.json()) as Record<string, unknown>;
-    expect(doc).toMatchObject({
+    expect(doc).toEqual({
       resource: RESOURCE,
       authorization_servers: [ORIGIN],
-      scopes_supported: ['world:read', 'world:write'],
+      scopes_supported: ['world:read', 'world:write', 'world:propose'],
       bearer_methods_supported: ['header'],
+      resource_name: 'World Canvas',
     });
     const root = await SELF.fetch(`${ORIGIN}/.well-known/oauth-protected-resource`);
     expect(root.status).toBe(200);
@@ -343,11 +373,7 @@ describe('Redirect allowlist', () => {
 
   it('never redirects for a stored client whose redirect is not allowlisted, even for an OAuth error', async () => {
     // A client stored without going through /register (as if registered before the allowlist changed).
-    const helpers = getOAuthApi({
-      apiRoute: '/mcp', apiHandler: { fetch: async () => new Response() }, defaultHandler: { fetch: async () => new Response() },
-      authorizeEndpoint: `${ORIGIN}/authorize`, tokenEndpoint: `${ORIGIN}/token`, resourceMetadata: { resource: RESOURCE, authorization_servers: [ORIGIN] },
-    }, { ...testEnv } as unknown as Env);
-    const client = await helpers.createClient({ redirectUris: ['https://elsewhere.example/cb'], tokenEndpointAuthMethod: 'none', clientName: 'Elsewhere' });
+    const client = await kvHelpers().createClient({ redirectUris: ['https://elsewhere.example/cb'], tokenEndpointAuthMethod: 'none', clientName: 'Elsewhere' });
     const ok = await openConsent({ clientId: client.clientId, redirectUri: 'https://elsewhere.example/cb' });
     expect(ok.response.status).toBe(400);
     expect(ok.response.headers.get('location')).toBeNull();
@@ -365,6 +391,34 @@ describe('Redirect allowlist', () => {
     expect(location.searchParams.get('error')).toBe('invalid_request');
     expect(location.searchParams.get('state')).toBe('s1');
     expect(location.searchParams.get('iss')).toBe(ORIGIN);
+  });
+
+  it('re-checks the allowlist when consent is approved: no Access redirect once the redirect is no longer allowed', async () => {
+    const clientId = await registerClaudeAi();
+    mockUpstream({ key: await signingKey() });
+    const consent = await openConsent({ clientId, redirectUri: CLAUDE_AI_CALLBACK });
+    expect(consent.response.status).toBe(200);
+    const form = new URLSearchParams({ handle: consent.handle!, decision: 'approve', scope: 'world:read' });
+    const response = await fetchWithEnv(ONLY_CHATGPT, `${ORIGIN}/authorize`, {
+      method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: form.toString(),
+    }, consent.start.jar);
+    expect(response.status).toBe(400);
+    expect(response.headers.get('location')).toBeNull();
+    expect(await response.text()).toContain('allowlist');
+  });
+
+  it('re-checks the allowlist at /callback: no Access token request and no code once the redirect is no longer allowed', async () => {
+    const clientId = await registerClaudeAi();
+    const key = await signingKey();
+    let nonce = '';
+    const upstream = mockUpstream({ key, idToken: async () => key.sign(accessClaims(nonce)) });
+    const { start, accessRedirect } = await approveToAccess({ clientId, redirectUri: CLAUDE_AI_CALLBACK });
+    nonce = accessRedirect.searchParams.get('nonce')!;
+    const url = `${ORIGIN}/callback?code=access-code-1&state=${encodeURIComponent(accessRedirect.searchParams.get('state')!)}`;
+    const response = await fetchWithEnv(ONLY_CHATGPT, url, {}, start.jar);
+    expect(response.status).toBe(400);
+    expect(response.headers.get('location')).toBeNull();
+    expect(upstream.tokenRequests).toHaveLength(0);
   });
 
   it('renders locally, never redirecting, for an unknown client or an unregistered redirect', async () => {
@@ -438,6 +492,32 @@ describe('Access sign-in failures never produce a code', () => {
     }
   });
 
+  it('a JWKS key that is not an RS256 verification key, or a signature that is not base64url: access_denied, not a 500', async () => {
+    const variants: [Record<string, unknown>, boolean][] = [
+      [{ use: 'enc' }, false],
+      [{ alg: 'RS512' }, false],
+      [{ key_ops: ['encrypt'] }, false],
+      [{}, true], // a good key, but the signature segment is not base64url
+    ];
+    for (const [jwkPatch, badSignature] of variants) {
+      const key = await signingKey();
+      const published = { ...key, jwk: { ...key.jwk, ...jwkPatch } };
+      const clientId = await registerClaudeAi();
+      let nonce = '';
+      mockUpstream({
+        key: published,
+        idToken: async () => {
+          const token = await key.sign(accessClaims(nonce));
+          return badSignature ? `${token.split('.').slice(0, 2).join('.')}.@@@` : token;
+        },
+      });
+      const { start, accessRedirect } = await approveToAccess({ clientId, redirectUri: CLAUDE_AI_CALLBACK });
+      nonce = accessRedirect.searchParams.get('nonce')!;
+      expectAccessDenied(await callback(start, { code: 'c', state: accessRedirect.searchParams.get('state')! }), start);
+      vi.restoreAllMocks();
+    }
+  });
+
   it('Access token endpoint failure: access_denied, no code', async () => {
     const clientId = await registerClaudeAi();
     mockUpstream({ key: await signingKey() }); // no idToken: the token endpoint answers 400
@@ -498,6 +578,168 @@ describe('Access sign-in failures never produce a code', () => {
     expect(consent.html).toContain('&#60;script&#62;alert(1)&#60;/script&#62;&#34;&#39;&#38;');
     expect(consent.response.headers.get('content-security-policy')).toContain("frame-ancestors 'none'");
     expect(consent.response.headers.get('x-frame-options')).toBe('DENY');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PKCE (R4.1, acceptance 3)
+// ---------------------------------------------------------------------------
+
+describe('PKCE with S256 is required of every client', () => {
+  async function registerConfidential(): Promise<string> {
+    const response = await registerClient({ client_name: 'Confidential', redirect_uris: [CLAUDE_AI_CALLBACK], token_endpoint_auth_method: 'client_secret_basic' });
+    expect(response.status).toBe(201);
+    return ((await response.json()) as { client_id: string }).client_id;
+  }
+
+  function expectPkceError(response: Response, state: string) {
+    expect(response.status).toBe(302);
+    const location = new URL(response.headers.get('location')!);
+    expect(`${location.origin}${location.pathname}`).toBe(CLAUDE_AI_CALLBACK);
+    expect(location.searchParams.get('error')).toBe('invalid_request');
+    expect(location.searchParams.get('state')).toBe(state);
+    expect(location.searchParams.get('iss')).toBe(ORIGIN);
+    expect(location.searchParams.get('code')).toBeNull();
+  }
+
+  it('a confidential DCR client without code_challenge gets an invalid_request redirect with iss, not a consent page', async () => {
+    const clientId = await registerConfidential();
+    const response = await SELF.fetch(authorizeUrl({ clientId, redirectUri: CLAUDE_AI_CALLBACK, state: 'conf-1' }), { redirect: 'manual' });
+    expectPkceError(response, 'conf-1');
+    // With S256 the same client reaches the consent page.
+    const withPkce = await openConsent({ clientId, redirectUri: CLAUDE_AI_CALLBACK });
+    expect(withPkce.response.status).toBe(200);
+    expect(withPkce.handle).toBeTruthy();
+  });
+
+  it('code_challenge_method=plain is refused for public and confidential clients', async () => {
+    for (const clientId of [await registerClaudeAi(), await registerConfidential()]) {
+      const url = new URL(authorizeUrl({ clientId, redirectUri: CLAUDE_AI_CALLBACK, state: 'plain-1' }));
+      url.searchParams.set('code_challenge', 'p'.repeat(50));
+      url.searchParams.set('code_challenge_method', 'plain');
+      expectPkceError(await SELF.fetch(url, { redirect: 'manual' }), 'plain-1');
+    }
+  });
+
+  it('a wrong code_verifier at /token gives invalid_grant and no token', async () => {
+    const clientId = await registerClaudeAi();
+    const flow = await codeFlow({ clientId, redirectUri: CLAUDE_AI_CALLBACK });
+    const code = new URL(flow.callbackResponse.headers.get('location')!).searchParams.get('code')!;
+    const wrong = await tokenRequest({ grant_type: 'authorization_code', code, redirect_uri: CLAUDE_AI_CALLBACK, code_verifier: randomString(), client_id: clientId });
+    expect(wrong.status).toBe(400);
+    expect(wrong.body.error).toBe('invalid_grant');
+    expect(wrong.body.access_token).toBeUndefined();
+  });
+});
+
+describe('Token lifetimes and consent defaults', () => {
+  it('issues 1 hour access tokens on a grant that ends 7 days after sign-in', async () => {
+    const clientId = await registerClaudeAi();
+    const flow = await accessToken({ clientId, redirectUri: CLAUDE_AI_CALLBACK });
+    expect(flow.tokenBody.expires_in).toBe(3600);
+    const grants = await kvHelpers().listUserGrants(encodeURIComponent('access-user-1'), { limit: 1000 });
+    const grant = grants.items.find((g) => g.clientId === clientId)!;
+    expect(grant.expiresAt).toBeDefined();
+    const lifetime = grant.expiresAt! - grant.createdAt;
+    expect(lifetime).toBeGreaterThanOrEqual(7 * 24 * 3600);
+    expect(lifetime).toBeLessThanOrEqual(7 * 24 * 3600 + 5);
+  });
+
+  it('pre-ticks only world:read when the client asked for none of our scopes, and what it asked for otherwise', async () => {
+    const clientId = await registerClaudeAi();
+    const none = await openConsent({ clientId, redirectUri: CLAUDE_AI_CALLBACK, scope: '' });
+    expect(none.html).toMatch(/value="world:read" checked/);
+    expect(none.html).toMatch(/value="world:write">/);
+    expect(none.html).toMatch(/value="world:propose">/);
+    const asked = await openConsent({ clientId, redirectUri: CLAUDE_AI_CALLBACK, scope: 'world:write world:propose offline_access' });
+    expect(asked.html).toMatch(/value="world:read">/);
+    expect(asked.html).toMatch(/value="world:write" checked/);
+    expect(asked.html).toMatch(/value="world:propose" checked/);
+  });
+});
+
+describe('/callback when the client changed after consent', () => {
+  it('a CIMD document that drops the redirect URI ends on a local page that clears the cookie, with no code', async () => {
+    const key = await signingKey();
+    const document = chatgptCimdDocument();
+    let nonce = '';
+    mockUpstream({ key, cimd: { [CHATGPT_CIMD]: document }, idToken: async () => key.sign(accessClaims(nonce)) });
+    const { start, accessRedirect } = await approveToAccess({ clientId: CHATGPT_CIMD, redirectUri: CHATGPT_REDIRECT });
+    nonce = accessRedirect.searchParams.get('nonce')!;
+    document.redirect_uris = ['https://chatgpt.com/connector/oauth/other'];
+    const response = await callback(start, { code: 'access-code-1', state: accessRedirect.searchParams.get('state')! });
+    expect(response.status).toBe(400);
+    expect(response.headers.get('location')).toBeNull();
+    expect(response.headers.getSetCookie().some((c) => c.startsWith('__Host-oauth-upstream-') && /max-age=0/i.test(c))).toBe(true);
+  });
+
+  it('a DCR client deleted after consent ends on a local page, with no code', async () => {
+    const clientId = await registerClaudeAi();
+    const key = await signingKey();
+    let nonce = '';
+    mockUpstream({ key, idToken: async () => key.sign(accessClaims(nonce)) });
+    const { start, accessRedirect } = await approveToAccess({ clientId, redirectUri: CLAUDE_AI_CALLBACK });
+    nonce = accessRedirect.searchParams.get('nonce')!;
+    await kvHelpers().deleteClient(clientId);
+    const response = await callback(start, { code: 'access-code-1', state: accessRedirect.searchParams.get('state')! });
+    expect(response.status).toBe(400);
+    expect(response.headers.get('location')).toBeNull();
+  });
+});
+
+describe('ChatGPT with its real CIMD document shape', () => {
+  async function realisticDocument() {
+    const clientKey = await signingKey();
+    const document = chatgptCimdDocument({
+      token_endpoint_auth_method: 'private_key_jwt',
+      token_endpoint_auth_methods_supported: ['none', 'private_key_jwt'],
+      jwks: { keys: [{ ...clientKey.jwk, use: 'sig', alg: 'RS256' }] },
+    });
+    return { clientKey, document };
+  }
+
+  async function assertion(key: SigningKey, extra: Record<string, unknown> = {}) {
+    const now = Math.floor(Date.now() / 1000);
+    return key.sign({ iss: CHATGPT_CIMD, sub: CHATGPT_CIMD, aud: ORIGIN, iat: now, exp: now + 120, jti: crypto.randomUUID(), ...extra });
+  }
+
+  async function codeFor(document: Record<string, unknown>) {
+    const flow = await codeFlow({ clientId: CHATGPT_CIMD, redirectUri: CHATGPT_REDIRECT, cimd: { [CHATGPT_CIMD]: document } });
+    expect(flow.callbackResponse.status).toBe(302);
+    return { start: flow.start, code: new URL(flow.callbackResponse.headers.get('location')!).searchParams.get('code')! };
+  }
+
+  it('completes as a public client with PKCE and no assertion', async () => {
+    const { document } = await realisticDocument();
+    const { start, code } = await codeFor(document);
+    const token = await tokenRequest({ grant_type: 'authorization_code', code, redirect_uri: CHATGPT_REDIRECT, code_verifier: start.verifier, client_id: CHATGPT_CIMD, resource: RESOURCE });
+    expect(token.status).toBe(200);
+    expect(token.body.resource).toBe(RESOURCE);
+    const added = await mcp(token.body.access_token as string, 'tools/call', addNode(worldName('cimd-public')));
+    expect(added.tool).toMatchObject({ ok: true, nodes: [{ createdBy: { harness: 'chatgpt' } }] });
+  });
+
+  it('completes with a valid private_key_jwt assertion, and refuses a forged one without falling back to none', async () => {
+    const { clientKey, document } = await realisticDocument();
+    const forger = await signingKey();
+    const first = await codeFor(document);
+    const forged = await tokenRequest({
+      grant_type: 'authorization_code', code: first.code, redirect_uri: CHATGPT_REDIRECT, code_verifier: first.start.verifier, client_id: CHATGPT_CIMD,
+      client_assertion_type: 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+      client_assertion: await forger.sign({ iss: CHATGPT_CIMD, sub: CHATGPT_CIMD, aud: ORIGIN, exp: Math.floor(Date.now() / 1000) + 120, jti: crypto.randomUUID() }, { kid: clientKey.kid }),
+    });
+    expect(forged.status).toBe(401);
+    expect(forged.body.error).toBe('invalid_client');
+    expect(forged.body.access_token).toBeUndefined();
+
+    const second = await codeFor(document);
+    const signed = await tokenRequest({
+      grant_type: 'authorization_code', code: second.code, redirect_uri: CHATGPT_REDIRECT, code_verifier: second.start.verifier, client_id: CHATGPT_CIMD,
+      client_assertion_type: 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+      client_assertion: await assertion(clientKey),
+    });
+    expect(signed.status).toBe(200);
+    expect((await mcp(signed.body.access_token as string, 'tools/list')).status).toBe(200);
   });
 });
 
