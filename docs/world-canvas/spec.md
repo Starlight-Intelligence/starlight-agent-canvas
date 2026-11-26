@@ -174,6 +174,8 @@ Success:
 { ok: true, graph, applied, changed: { nodes, edges, removedNodes, removedEdges }, proposals: CanonProposal[] }
 ```
 
+`proposals` reflects the final state of the batch: at most one entry per target, at the target's final version, and only for targets that still exist with `canon.status: "proposed"`. A proposal followed in the same batch by an edit (which resets the target to draft) or a remove is dropped. A patch key set to `undefined` counts as not changed.
+
 Failure:
 
 ```ts
@@ -225,7 +227,7 @@ It reads layout, not names:
 - `Seven Houses: A, B, C.` gives one `house` node per item, `part-of` the `Seven Houses` concept.
 - A short large text is a heading; the text under it is its summary. Kind: lexicon, else section hint (a "story" section holds characters), else `concept`.
 - Bullet lists give one node per bullet. Pills become `concept` nodes. Shapes without text are frames and are skipped.
-- A small text under an image is its caption; text inside an image box is the image summary. Images become `image` nodes with `media[].originalSrc` and `needsReupload: true`. An image right above or left of a heading gets `image references entity` (label `depicts`).
+- A small text under an image is its caption; text inside an image box is the image summary. Images become `image` nodes with `media[].originalSrc` and `needsReupload: true`. A `src` over 100,000 characters (the `originalSrc` cap) keeps the node without media, records `meta.oversizedSrc` (length, hash, prefix) and `meta.needsReupload: true`, and adds a report warning. A free text longer than the summary limit keeps its full text in `body` even without a newline. An image right above or left of a heading gets `image references entity` (label `depicts`).
 - Arrows become `precedes` edges. A node whose text names another entity title gets `references` (label `mentions`).
 - Everything imported is `canon.status: "draft"`, `createdBy.harness: "importer"`. Output is deterministic.
 
