@@ -18,10 +18,10 @@
     "node": ">=22.13.0"
   },
   "scripts": {
-    "dev": "pnpm --filter @starlight-agent-canvas/core build && pnpm --filter @starlight-agent-canvas/web dev",
+    "dev": "pnpm --filter @starlight-agent-canvas/core build && pnpm --filter @starlight-agent-canvas/world build && pnpm --filter @starlight-agent-canvas/web dev",
     "build": "pnpm --filter @starlight-agent-canvas/core build && pnpm --filter @starlight-agent-canvas/world build && pnpm --filter @starlight-agent-canvas/mcp build && pnpm --filter @starlight-agent-canvas/web build",
     "typecheck": "pnpm --filter @starlight-agent-canvas/core build && pnpm --filter @starlight-agent-canvas/world build && pnpm -r typecheck",
-    "test": "pnpm --filter @starlight-agent-canvas/core test && pnpm --filter @starlight-agent-canvas/world test && pnpm --filter @starlight-agent-canvas/core build && pnpm --filter @starlight-agent-canvas/mcp test && pnpm world-edge:test",
+    "test": "pnpm --filter @starlight-agent-canvas/core test && pnpm --filter @starlight-agent-canvas/world test && pnpm --filter @starlight-agent-canvas/core build && pnpm --filter @starlight-agent-canvas/mcp test && pnpm --filter @starlight-agent-canvas/world build && pnpm --filter @starlight-agent-canvas/web test && pnpm world-edge:test",
     "verify": "pnpm typecheck && pnpm test && pnpm build",
     "start": "pnpm build && pnpm --filter @starlight-agent-canvas/web start",
     "preview:prod": "pnpm build && pnpm --filter @starlight-agent-canvas/web start -p 3101",
@@ -51,7 +51,8 @@
     "mcp:start": "pnpm --filter @starlight-agent-canvas/mcp start",
     "test:codex-config": "node --test scripts/codex-config.test.mjs",
     "test:portable-mcp": "node --test scripts/portable-mcp.test.mjs",
-    "mcp:package": "node scripts/portable-mcp.mjs"
+    "mcp:package": "node scripts/portable-mcp.mjs",
+    "world:generate": "pnpm --filter @starlight-agent-canvas/web world:generate"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",

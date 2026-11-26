@@ -1,0 +1,3657 @@
+{
+ "schemaVersion": "starlight.worldGraph.v1",
+ "world": {
+  "id": "demo",
+  "title": "Demo world",
+  "summary": "Synthetic fixture for e2e tests.",
+  "version": 1,
+  "regions": [
+   {
+    "id": "r_gen_0",
+    "title": "Northern reach",
+    "bounds": {
+     "x": 0,
+     "y": 0,
+     "w": 2800,
+     "h": 2000
+    },
+    "color": "#6f9a8d"
+   }
+  ],
+  "updatedAt": "2026-11-25T00:00:00.000Z"
+ },
+ "nodes": [
+  {
+   "id": "n_gen_0",
+   "worldId": "demo",
+   "kind": "character",
+   "title": "Lantern keeper",
+   "summary": "Generated chapter 0 in northern reach.",
+   "body": "",
+   "tags": [
+    "chapter",
+    "region-0"
+   ],
+   "canon": {
+    "status": "draft"
+   },
+   "media": [],
+   "position": {
+    "x": 224,
+    "y": 202
+   },
+   "size": {
+    "w": 240,
+    "h": 96
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  },
+  {
+   "id": "n_gen_1",
+   "worldId": "demo",
+   "kind": "place",
+   "title": "Harbor of glass",
+   "summary": "Generated chapter 1 in northern reach.",
+   "body": "",
+   "tags": [
+    "chapter",
+    "region-0"
+   ],
+   "canon": {
+    "status": "draft"
+   },
+   "media": [],
+   "position": {
+    "x": 509,
+    "y": 223
+   },
+   "size": {
+    "w": 240,
+    "h": 96
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "claude",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  },
+  {
+   "id": "n_gen_2",
+   "worldId": "demo",
+   "kind": "book",
+   "title": "Ardra book",
+   "summary": "Generated book 2 in northern reach.",
+   "body": "",
+   "tags": [
+    "book",
+    "region-0"
+   ],
+   "canon": {
+    "status": "draft"
+   },
+   "media": [],
+   "position": {
+    "x": 812,
+    "y": 226
+   },
+   "size": {
+    "w": 240,
+    "h": 96
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "codex",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  },
+  {
+   "id": "n_gen_3",
+   "worldId": "demo",
+   "kind": "event",
+   "title": "Enttho event",
+   "summary": "Generated event 3 in northern reach.",
+   "body": "",
+   "tags": [
+    "event",
+    "region-0"
+   ],
+   "canon": {
+    "status": "draft"
+   },
+   "media": [],
+   "position": {
+    "x": 1100,
+    "y": 223
+   },
+   "size": {
+    "w": 240,
+    "h": 96
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "human",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  },
+  {
+   "id": "n_gen_4",
+   "worldId": "demo",
+   "kind": "god",
+   "title": "Iondra god",
+   "summary": "Generated god 4 in northern reach.",
+   "body": "",
+   "tags": [
+    "god",
+    "region-0"
+   ],
+   "canon": {
+    "status": "draft"
+   },
+   "media": [],
+   "position": {
+    "x": 1439,
+    "y": 207
+   },
+   "size": {
+    "w": 240,
+    "h": 96
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "chatgpt",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  },
+  {
+   "id": "n_gen_5",
+   "worldId": "demo",
+   "kind": "image",
+   "title": "Lynsor image",
+   "summary": "Generated image 5 in northern reach.",
+   "body": "",
+   "tags": [
+    "image",
+    "region-0"
+   ],
+   "canon": {
+    "status": "draft"
+   },
+   "media": [],
+   "position": {
+    "x": 1739,
+    "y": 208
+   },
+   "size": {
+    "w": 240,
+    "h": 150
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  },
+  {
+   "id": "n_gen_6",
+   "worldId": "demo",
+   "kind": "gate",
+   "title": "Unaent gate",
+   "summary": "Generated gate 6 in northern reach.",
+   "body": "",
+   "tags": [
+    "gate",
+    "region-0"
+   ],
+   "canon": {
+    "status": "draft"
+   },
+   "media": [],
+   "position": {
+    "x": 2035,
+    "y": 215
+   },
+   "size": {
+    "w": 240,
+    "h": 96
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "claude",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  },
+  {
+   "id": "n_gen_7",
+   "worldId": "demo",
+   "kind": "book",
+   "title": "Ionra book",
+   "summary": "Generated book 7 in northern reach.",
+   "body": "",
+   "tags": [
+    "book",
+    "region-0"
+   ],
+   "canon": {
+    "status": "draft"
+   },
+   "media": [],
+   "position": {
+    "x": 2323,
+    "y": 209
+   },
+   "size": {
+    "w": 240,
+    "h": 96
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "codex",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  },
+  {
+   "id": "n_gen_8",
+   "worldId": "demo",
+   "kind": "book",
+   "title": "Arcal book",
+   "summary": "Generated book 8 in northern reach.",
+   "body": "",
+   "tags": [
+    "book",
+    "region-0"
+   ],
+   "canon": {
+    "status": "draft"
+   },
+   "media": [],
+   "position": {
+    "x": 213,
+    "y": 410
+   },
+   "size": {
+    "w": 240,
+    "h": 96
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "human",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  },
+  {
+   "id": "n_gen_9",
+   "worldId": "demo",
+   "kind": "gate",
+   "title": "Kamor gate",
+   "summary": "Generated gate 9 in northern reach.",
+   "body": "",
+   "tags": [
+    "gate",
+    "region-0"
+   ],
+   "canon": {
+    "status": "proposed"
+   },
+   "media": [],
+   "position": {
+    "x": 511,
+    "y": 429
+   },
+   "size": {
+    "w": 240,
+    "h": 96
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "chatgpt",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  },
+  {
+   "id": "n_gen_10",
+   "worldId": "demo",
+   "kind": "godbeast",
+   "title": "Islyn godbeast",
+   "summary": "Generated godbeast 10 in northern reach.",
+   "body": "",
+   "tags": [
+    "godbeast",
+    "region-0"
+   ],
+   "canon": {
+    "status": "draft"
+   },
+   "media": [],
+   "position": {
+    "x": 826,
+    "y": 402
+   },
+   "size": {
+    "w": 240,
+    "h": 96
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  },
+  {
+   "id": "n_gen_11",
+   "worldId": "demo",
+   "kind": "chapter",
+   "title": "Nyxtho chapter",
+   "summary": "Generated chapter 11 in northern reach.",
+   "body": "",
+   "tags": [
+    "chapter",
+    "region-0"
+   ],
+   "canon": {
+    "status": "draft"
+   },
+   "media": [],
+   "position": {
+    "x": 1137,
+    "y": 401
+   },
+   "size": {
+    "w": 240,
+    "h": 96
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "claude",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  },
+  {
+   "id": "n_gen_12",
+   "worldId": "demo",
+   "kind": "note",
+   "title": "Thonyx note",
+   "summary": "Generated note 12 in northern reach.",
+   "body": "",
+   "tags": [
+    "note",
+    "region-0"
+   ],
+   "canon": {
+    "status": "draft"
+   },
+   "media": [],
+   "position": {
+    "x": 1434,
+    "y": 425
+   },
+   "size": {
+    "w": 240,
+    "h": 96
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "codex",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  },
+  {
+   "id": "n_gen_13",
+   "worldId": "demo",
+   "kind": "note",
+   "title": "Entnyx note",
+   "summary": "Generated note 13 in northern reach.",
+   "body": "",
+   "tags": [
+    "note",
+    "region-0"
+   ],
+   "canon": {
+    "status": "draft"
+   },
+   "media": [],
+   "position": {
+    "x": 1704,
+    "y": 408
+   },
+   "size": {
+    "w": 240,
+    "h": 96
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "human",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  },
+  {
+   "id": "n_gen_14",
+   "worldId": "demo",
+   "kind": "place",
+   "title": "Thois place",
+   "summary": "Generated place 14 in northern reach.",
+   "body": "",
+   "tags": [
+    "place",
+    "region-0"
+   ],
+   "canon": {
+    "status": "draft"
+   },
+   "media": [],
+   "position": {
+    "x": 2005,
+    "y": 402
+   },
+   "size": {
+    "w": 240,
+    "h": 96
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "chatgpt",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  },
+  {
+   "id": "n_gen_15",
+   "worldId": "demo",
+   "kind": "event",
+   "title": "Rasor event",
+   "summary": "Generated event 15 in northern reach.",
+   "body": "",
+   "tags": [
+    "event",
+    "region-0"
+   ],
+   "canon": {
+    "status": "draft"
+   },
+   "media": [],
+   "position": {
+    "x": 2303,
+    "y": 408
+   },
+   "size": {
+    "w": 240,
+    "h": 96
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  },
+  {
+   "id": "n_gen_16",
+   "worldId": "demo",
+   "kind": "god",
+   "title": "Entent god",
+   "summary": "Generated god 16 in northern reach.",
+   "body": "",
+   "tags": [
+    "god",
+    "region-0"
+   ],
+   "canon": {
+    "status": "draft"
+   },
+   "media": [],
+   "position": {
+    "x": 204,
+    "y": 623
+   },
+   "size": {
+    "w": 240,
+    "h": 96
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "claude",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  },
+  {
+   "id": "n_gen_17",
+   "worldId": "demo",
+   "kind": "book",
+   "title": "Ionvael book",
+   "summary": "Generated book 17 in northern reach.",
+   "body": "",
+   "tags": [
+    "book",
+    "region-0"
+   ],
+   "canon": {
+    "status": "draft"
+   },
+   "media": [],
+   "position": {
+    "x": 516,
+    "y": 601
+   },
+   "size": {
+    "w": 240,
+    "h": 96
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "codex",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  },
+  {
+   "id": "n_gen_18",
+   "worldId": "demo",
+   "kind": "note",
+   "title": "Lynis note",
+   "summary": "Generated note 18 in northern reach.",
+   "body": "",
+   "tags": [
+    "note",
+    "region-0"
+   ],
+   "canon": {
+    "status": "draft"
+   },
+   "media": [],
+   "position": {
+    "x": 802,
+    "y": 624
+   },
+   "size": {
+    "w": 240,
+    "h": 96
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "human",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  },
+  {
+   "id": "n_gen_19",
+   "worldId": "demo",
+   "kind": "story",
+   "title": "Mormera story",
+   "summary": "Generated story 19 in northern reach.",
+   "body": "",
+   "tags": [
+    "story",
+    "region-0"
+   ],
+   "canon": {
+    "status": "draft"
+   },
+   "media": [],
+   "position": {
+    "x": 1123,
+    "y": 603
+   },
+   "size": {
+    "w": 240,
+    "h": 96
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "chatgpt",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  },
+  {
+   "id": "n_gen_20",
+   "worldId": "demo",
+   "kind": "book",
+   "title": "Thoquil book",
+   "summary": "Generated book 20 in northern reach.",
+   "body": "",
+   "tags": [
+    "book",
+    "region-0"
+   ],
+   "canon": {
+    "status": "draft"
+   },
+   "media": [],
+   "position": {
+    "x": 1409,
+    "y": 607
+   },
+   "size": {
+    "w": 240,
+    "h": 96
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  },
+  {
+   "id": "n_gen_21",
+   "worldId": "demo",
+   "kind": "book",
+   "title": "Draent book",
+   "summary": "Generated book 21 in northern reach.",
+   "body": "",
+   "tags": [
+    "book",
+    "region-0"
+   ],
+   "canon": {
+    "status": "draft"
+   },
+   "media": [],
+   "position": {
+    "x": 1701,
+    "y": 618
+   },
+   "size": {
+    "w": 240,
+    "h": 96
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "claude",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  },
+  {
+   "id": "n_gen_22",
+   "worldId": "demo",
+   "kind": "character",
+   "title": "Ionlyn",
+   "summary": "Generated character 22 in northern reach.",
+   "body": "",
+   "tags": [
+    "character",
+    "region-0"
+   ],
+   "canon": {
+    "status": "draft"
+   },
+   "media": [],
+   "position": {
+    "x": 2013,
+    "y": 619
+   },
+   "size": {
+    "w": 240,
+    "h": 96
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "codex",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  },
+  {
+   "id": "n_gen_23",
+   "worldId": "demo",
+   "kind": "book",
+   "title": "Unais book",
+   "summary": "Generated book 23 in northern reach.",
+   "body": "",
+   "tags": [
+    "book",
+    "region-0"
+   ],
+   "canon": {
+    "status": "draft"
+   },
+   "media": [],
+   "position": {
+    "x": 2311,
+    "y": 601
+   },
+   "size": {
+    "w": 240,
+    "h": 96
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "human",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  },
+  {
+   "id": "n_gen_24",
+   "worldId": "demo",
+   "kind": "character",
+   "title": "Merauna",
+   "summary": "Generated character 24 in northern reach.",
+   "body": "",
+   "tags": [
+    "character",
+    "region-0"
+   ],
+   "canon": {
+    "status": "draft"
+   },
+   "media": [],
+   "position": {
+    "x": 218,
+    "y": 801
+   },
+   "size": {
+    "w": 240,
+    "h": 96
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "chatgpt",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  },
+  {
+   "id": "n_gen_25",
+   "worldId": "demo",
+   "kind": "book",
+   "title": "Thouna book",
+   "summary": "Generated book 25 in northern reach.",
+   "body": "",
+   "tags": [
+    "book",
+    "region-0"
+   ],
+   "canon": {
+    "status": "draft"
+   },
+   "media": [],
+   "position": {
+    "x": 530,
+    "y": 829
+   },
+   "size": {
+    "w": 240,
+    "h": 96
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  },
+  {
+   "id": "n_gen_26",
+   "worldId": "demo",
+   "kind": "god",
+   "title": "Mortho god",
+   "summary": "Generated god 26 in northern reach.",
+   "body": "",
+   "tags": [
+    "god",
+    "region-0"
+   ],
+   "canon": {
+    "status": "proposed"
+   },
+   "media": [],
+   "position": {
+    "x": 811,
+    "y": 822
+   },
+   "size": {
+    "w": 240,
+    "h": 96
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "claude",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  },
+  {
+   "id": "n_gen_27",
+   "worldId": "demo",
+   "kind": "book",
+   "title": "Nyxtho book",
+   "summary": "Generated book 27 in northern reach.",
+   "body": "",
+   "tags": [
+    "book",
+    "region-0"
+   ],
+   "canon": {
+    "status": "draft"
+   },
+   "media": [],
+   "position": {
+    "x": 1109,
+    "y": 819
+   },
+   "size": {
+    "w": 240,
+    "h": 96
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "codex",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  },
+  {
+   "id": "n_gen_28",
+   "worldId": "demo",
+   "kind": "story",
+   "title": "Raquil story",
+   "summary": "Generated story 28 in northern reach.",
+   "body": "",
+   "tags": [
+    "story",
+    "region-0"
+   ],
+   "canon": {
+    "status": "draft"
+   },
+   "media": [],
+   "position": {
+    "x": 1417,
+    "y": 817
+   },
+   "size": {
+    "w": 240,
+    "h": 96
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "human",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  },
+  {
+   "id": "n_gen_29",
+   "worldId": "demo",
+   "kind": "place",
+   "title": "Vaeldra place",
+   "summary": "Generated place 29 in northern reach.",
+   "body": "",
+   "tags": [
+    "place",
+    "region-0"
+   ],
+   "canon": {
+    "status": "draft"
+   },
+   "media": [],
+   "position": {
+    "x": 1702,
+    "y": 818
+   },
+   "size": {
+    "w": 240,
+    "h": 96
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "chatgpt",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  },
+  {
+   "id": "n_gen_30",
+   "worldId": "demo",
+   "kind": "house",
+   "title": "Vaelnyx house",
+   "summary": "Generated house 30 in northern reach.",
+   "body": "",
+   "tags": [
+    "house",
+    "region-0"
+   ],
+   "canon": {
+    "status": "draft"
+   },
+   "media": [],
+   "position": {
+    "x": 2014,
+    "y": 807
+   },
+   "size": {
+    "w": 240,
+    "h": 96
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  },
+  {
+   "id": "n_gen_31",
+   "worldId": "demo",
+   "kind": "story",
+   "title": "Quilvael story",
+   "summary": "Generated story 31 in northern reach.",
+   "body": "",
+   "tags": [
+    "story",
+    "region-0"
+   ],
+   "canon": {
+    "status": "draft"
+   },
+   "media": [],
+   "position": {
+    "x": 2309,
+    "y": 823
+   },
+   "size": {
+    "w": 240,
+    "h": 96
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "claude",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  },
+  {
+   "id": "n_gen_32",
+   "worldId": "demo",
+   "kind": "godbeast",
+   "title": "Quilion godbeast",
+   "summary": "Generated godbeast 32 in northern reach.",
+   "body": "",
+   "tags": [
+    "godbeast",
+    "region-0"
+   ],
+   "canon": {
+    "status": "draft"
+   },
+   "media": [],
+   "position": {
+    "x": 205,
+    "y": 1029
+   },
+   "size": {
+    "w": 240,
+    "h": 96
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "codex",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  },
+  {
+   "id": "n_gen_33",
+   "worldId": "demo",
+   "kind": "story",
+   "title": "Vaelion story",
+   "summary": "Generated story 33 in northern reach.",
+   "body": "",
+   "tags": [
+    "story",
+    "region-0"
+   ],
+   "canon": {
+    "status": "draft"
+   },
+   "media": [],
+   "position": {
+    "x": 508,
+    "y": 1029
+   },
+   "size": {
+    "w": 240,
+    "h": 96
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "human",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  },
+  {
+   "id": "n_gen_34",
+   "worldId": "demo",
+   "kind": "character",
+   "title": "Raquil",
+   "summary": "Generated character 34 in northern reach.",
+   "body": "",
+   "tags": [
+    "character",
+    "region-0"
+   ],
+   "canon": {
+    "status": "draft"
+   },
+   "media": [],
+   "position": {
+    "x": 830,
+    "y": 1015
+   },
+   "size": {
+    "w": 240,
+    "h": 96
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "chatgpt",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  },
+  {
+   "id": "n_gen_35",
+   "worldId": "demo",
+   "kind": "gate",
+   "title": "Unador gate",
+   "summary": "Generated gate 35 in northern reach.",
+   "body": "",
+   "tags": [
+    "gate",
+    "region-0"
+   ],
+   "canon": {
+    "status": "draft"
+   },
+   "media": [],
+   "position": {
+    "x": 1120,
+    "y": 1003
+   },
+   "size": {
+    "w": 240,
+    "h": 96
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  },
+  {
+   "id": "n_gen_36",
+   "worldId": "demo",
+   "kind": "house",
+   "title": "Lynion house",
+   "summary": "Generated house 36 in northern reach.",
+   "body": "",
+   "tags": [
+    "house",
+    "region-0"
+   ],
+   "canon": {
+    "status": "draft"
+   },
+   "media": [],
+   "position": {
+    "x": 1419,
+    "y": 1029
+   },
+   "size": {
+    "w": 240,
+    "h": 96
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "claude",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  },
+  {
+   "id": "n_gen_37",
+   "worldId": "demo",
+   "kind": "gate",
+   "title": "Merador gate",
+   "summary": "Generated gate 37 in northern reach.",
+   "body": "",
+   "tags": [
+    "gate",
+    "region-0"
+   ],
+   "canon": {
+    "status": "draft"
+   },
+   "media": [],
+   "position": {
+    "x": 1708,
+    "y": 1023
+   },
+   "size": {
+    "w": 240,
+    "h": 96
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "codex",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  },
+  {
+   "id": "n_gen_38",
+   "worldId": "demo",
+   "kind": "book",
+   "title": "Arsor book",
+   "summary": "Generated book 38 in northern reach.",
+   "body": "",
+   "tags": [
+    "book",
+    "region-0"
+   ],
+   "canon": {
+    "status": "draft"
+   },
+   "media": [],
+   "position": {
+    "x": 2036,
+    "y": 1000
+   },
+   "size": {
+    "w": 240,
+    "h": 96
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "human",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  },
+  {
+   "id": "n_gen_39",
+   "worldId": "demo",
+   "kind": "house",
+   "title": "Ostsor house",
+   "summary": "Generated house 39 in northern reach.",
+   "body": "",
+   "tags": [
+    "house",
+    "region-0"
+   ],
+   "canon": {
+    "status": "draft"
+   },
+   "media": [],
+   "position": {
+    "x": 2312,
+    "y": 1019
+   },
+   "size": {
+    "w": 240,
+    "h": 96
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "chatgpt",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  },
+  {
+   "id": "n_gen_40",
+   "worldId": "demo",
+   "kind": "god",
+   "title": "Vaelar god",
+   "summary": "Generated god 40 in northern reach.",
+   "body": "",
+   "tags": [
+    "god",
+    "region-0"
+   ],
+   "canon": {
+    "status": "draft"
+   },
+   "media": [],
+   "position": {
+    "x": 211,
+    "y": 1224
+   },
+   "size": {
+    "w": 240,
+    "h": 96
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  },
+  {
+   "id": "n_gen_41",
+   "worldId": "demo",
+   "kind": "image",
+   "title": "Dornyx image",
+   "summary": "Generated image 41 in northern reach.",
+   "body": "",
+   "tags": [
+    "image",
+    "region-0"
+   ],
+   "canon": {
+    "status": "draft"
+   },
+   "media": [],
+   "position": {
+    "x": 525,
+    "y": 1202
+   },
+   "size": {
+    "w": 240,
+    "h": 150
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "claude",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  },
+  {
+   "id": "n_gen_42",
+   "worldId": "demo",
+   "kind": "story",
+   "title": "Nyxnyx story",
+   "summary": "Generated story 42 in northern reach.",
+   "body": "",
+   "tags": [
+    "story",
+    "region-0"
+   ],
+   "canon": {
+    "status": "proposed"
+   },
+   "media": [],
+   "position": {
+    "x": 825,
+    "y": 1212
+   },
+   "size": {
+    "w": 240,
+    "h": 96
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "codex",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  },
+  {
+   "id": "n_gen_43",
+   "worldId": "demo",
+   "kind": "story",
+   "title": "Dorion story",
+   "summary": "Generated story 43 in northern reach.",
+   "body": "",
+   "tags": [
+    "story",
+    "region-0"
+   ],
+   "canon": {
+    "status": "draft"
+   },
+   "media": [],
+   "position": {
+    "x": 1106,
+    "y": 1210
+   },
+   "size": {
+    "w": 240,
+    "h": 96
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "human",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  },
+  {
+   "id": "n_gen_44",
+   "worldId": "demo",
+   "kind": "note",
+   "title": "Unadra note",
+   "summary": "Generated note 44 in northern reach.",
+   "body": "",
+   "tags": [
+    "note",
+    "region-0"
+   ],
+   "canon": {
+    "status": "draft"
+   },
+   "media": [],
+   "position": {
+    "x": 1400,
+    "y": 1222
+   },
+   "size": {
+    "w": 240,
+    "h": 96
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "chatgpt",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  },
+  {
+   "id": "n_gen_45",
+   "worldId": "demo",
+   "kind": "image",
+   "title": "Quilel image",
+   "summary": "Generated image 45 in northern reach.",
+   "body": "",
+   "tags": [
+    "image",
+    "region-0"
+   ],
+   "canon": {
+    "status": "draft"
+   },
+   "media": [],
+   "position": {
+    "x": 1723,
+    "y": 1225
+   },
+   "size": {
+    "w": 240,
+    "h": 150
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  },
+  {
+   "id": "n_gen_46",
+   "worldId": "demo",
+   "kind": "house",
+   "title": "Elquil house",
+   "summary": "Generated house 46 in northern reach.",
+   "body": "",
+   "tags": [
+    "house",
+    "region-0"
+   ],
+   "canon": {
+    "status": "draft"
+   },
+   "media": [],
+   "position": {
+    "x": 2022,
+    "y": 1223
+   },
+   "size": {
+    "w": 240,
+    "h": 96
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "claude",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  },
+  {
+   "id": "n_gen_47",
+   "worldId": "demo",
+   "kind": "book",
+   "title": "Vaelra book",
+   "summary": "Generated book 47 in northern reach.",
+   "body": "",
+   "tags": [
+    "book",
+    "region-0"
+   ],
+   "canon": {
+    "status": "draft"
+   },
+   "media": [],
+   "position": {
+    "x": 2322,
+    "y": 1211
+   },
+   "size": {
+    "w": 240,
+    "h": 96
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "codex",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  },
+  {
+   "id": "n_gen_48",
+   "worldId": "demo",
+   "kind": "godbeast",
+   "title": "Vaelka godbeast",
+   "summary": "Generated godbeast 48 in northern reach.",
+   "body": "",
+   "tags": [
+    "godbeast",
+    "region-0"
+   ],
+   "canon": {
+    "status": "draft"
+   },
+   "media": [],
+   "position": {
+    "x": 212,
+    "y": 1411
+   },
+   "size": {
+    "w": 240,
+    "h": 96
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "human",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  },
+  {
+   "id": "n_gen_49",
+   "worldId": "demo",
+   "kind": "house",
+   "title": "Meramera house",
+   "summary": "Generated house 49 in northern reach.",
+   "body": "",
+   "tags": [
+    "house",
+    "region-0"
+   ],
+   "canon": {
+    "status": "draft"
+   },
+   "media": [],
+   "position": {
+    "x": 527,
+    "y": 1408
+   },
+   "size": {
+    "w": 240,
+    "h": 96
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "chatgpt",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  },
+  {
+   "id": "n_gen_50",
+   "worldId": "demo",
+   "kind": "house",
+   "title": "Ionost house",
+   "summary": "Generated house 50 in northern reach.",
+   "body": "",
+   "tags": [
+    "house",
+    "region-0"
+   ],
+   "canon": {
+    "status": "draft"
+   },
+   "media": [],
+   "position": {
+    "x": 835,
+    "y": 1404
+   },
+   "size": {
+    "w": 240,
+    "h": 96
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  },
+  {
+   "id": "n_gen_51",
+   "worldId": "demo",
+   "kind": "story",
+   "title": "Entnyx story",
+   "summary": "Generated story 51 in northern reach.",
+   "body": "",
+   "tags": [
+    "story",
+    "region-0"
+   ],
+   "canon": {
+    "status": "draft"
+   },
+   "media": [],
+   "position": {
+    "x": 1115,
+    "y": 1425
+   },
+   "size": {
+    "w": 240,
+    "h": 96
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "claude",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  },
+  {
+   "id": "n_gen_52",
+   "worldId": "demo",
+   "kind": "gate",
+   "title": "Elar gate",
+   "summary": "Generated gate 52 in northern reach.",
+   "body": "",
+   "tags": [
+    "gate",
+    "region-0"
+   ],
+   "canon": {
+    "status": "draft"
+   },
+   "media": [],
+   "position": {
+    "x": 1411,
+    "y": 1424
+   },
+   "size": {
+    "w": 240,
+    "h": 96
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "codex",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  },
+  {
+   "id": "n_gen_53",
+   "worldId": "demo",
+   "kind": "book",
+   "title": "Armor book",
+   "summary": "Generated book 53 in northern reach.",
+   "body": "",
+   "tags": [
+    "book",
+    "region-0"
+   ],
+   "canon": {
+    "status": "draft"
+   },
+   "media": [],
+   "position": {
+    "x": 1705,
+    "y": 1417
+   },
+   "size": {
+    "w": 240,
+    "h": 96
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "human",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  },
+  {
+   "id": "n_gen_54",
+   "worldId": "demo",
+   "kind": "godbeast",
+   "title": "Meratho godbeast",
+   "summary": "Generated godbeast 54 in northern reach.",
+   "body": "",
+   "tags": [
+    "godbeast",
+    "region-0"
+   ],
+   "canon": {
+    "status": "draft"
+   },
+   "media": [],
+   "position": {
+    "x": 2028,
+    "y": 1411
+   },
+   "size": {
+    "w": 240,
+    "h": 96
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "chatgpt",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  },
+  {
+   "id": "n_gen_55",
+   "worldId": "demo",
+   "kind": "godbeast",
+   "title": "Lynmera godbeast",
+   "summary": "Generated godbeast 55 in northern reach.",
+   "body": "",
+   "tags": [
+    "godbeast",
+    "region-0"
+   ],
+   "canon": {
+    "status": "draft"
+   },
+   "media": [],
+   "position": {
+    "x": 2315,
+    "y": 1426
+   },
+   "size": {
+    "w": 240,
+    "h": 96
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  },
+  {
+   "id": "n_gen_56",
+   "worldId": "demo",
+   "kind": "house",
+   "title": "Rauna house",
+   "summary": "Generated house 56 in northern reach.",
+   "body": "",
+   "tags": [
+    "house",
+    "region-0"
+   ],
+   "canon": {
+    "status": "draft"
+   },
+   "media": [],
+   "position": {
+    "x": 210,
+    "y": 1611
+   },
+   "size": {
+    "w": 240,
+    "h": 96
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "claude",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  },
+  {
+   "id": "n_gen_57",
+   "worldId": "demo",
+   "kind": "character",
+   "title": "Ostar",
+   "summary": "Generated character 57 in northern reach.",
+   "body": "",
+   "tags": [
+    "character",
+    "region-0"
+   ],
+   "canon": {
+    "status": "draft"
+   },
+   "media": [],
+   "position": {
+    "x": 501,
+    "y": 1625
+   },
+   "size": {
+    "w": 240,
+    "h": 96
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "codex",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  },
+  {
+   "id": "n_gen_58",
+   "worldId": "demo",
+   "kind": "godbeast",
+   "title": "Drauna godbeast",
+   "summary": "Generated godbeast 58 in northern reach.",
+   "body": "",
+   "tags": [
+    "godbeast",
+    "region-0"
+   ],
+   "canon": {
+    "status": "draft"
+   },
+   "media": [],
+   "position": {
+    "x": 809,
+    "y": 1606
+   },
+   "size": {
+    "w": 240,
+    "h": 96
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "human",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  },
+  {
+   "id": "n_gen_59",
+   "worldId": "demo",
+   "kind": "god",
+   "title": "Entvael god",
+   "summary": "Generated god 59 in northern reach.",
+   "body": "",
+   "tags": [
+    "god",
+    "region-0"
+   ],
+   "canon": {
+    "status": "draft"
+   },
+   "media": [],
+   "position": {
+    "x": 1102,
+    "y": 1629
+   },
+   "size": {
+    "w": 240,
+    "h": 96
+   },
+   "regionId": "r_gen_0",
+   "layer": 0,
+   "createdBy": {
+    "harness": "chatgpt",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {
+    "generated": true
+   }
+  }
+ ],
+ "edges": [
+  {
+   "id": "e_gen_0",
+   "worldId": "demo",
+   "from": "n_gen_47",
+   "to": "n_gen_58",
+   "relation": "part-of",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_1",
+   "worldId": "demo",
+   "from": "n_gen_30",
+   "to": "n_gen_24",
+   "relation": "member-of",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_2",
+   "worldId": "demo",
+   "from": "n_gen_46",
+   "to": "n_gen_9",
+   "relation": "member-of",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_3",
+   "worldId": "demo",
+   "from": "n_gen_46",
+   "to": "n_gen_28",
+   "relation": "member-of",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_4",
+   "worldId": "demo",
+   "from": "n_gen_49",
+   "to": "n_gen_59",
+   "relation": "member-of",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_5",
+   "worldId": "demo",
+   "from": "n_gen_30",
+   "to": "n_gen_29",
+   "relation": "member-of",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_6",
+   "worldId": "demo",
+   "from": "n_gen_32",
+   "to": "n_gen_50",
+   "relation": "bonded-to",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_7",
+   "worldId": "demo",
+   "from": "n_gen_8",
+   "to": "n_gen_12",
+   "relation": "part-of",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_8",
+   "worldId": "demo",
+   "from": "n_gen_11",
+   "to": "n_gen_18",
+   "relation": "part-of",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_9",
+   "worldId": "demo",
+   "from": "n_gen_2",
+   "to": "n_gen_13",
+   "relation": "part-of",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_10",
+   "worldId": "demo",
+   "from": "n_gen_50",
+   "to": "n_gen_47",
+   "relation": "member-of",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_11",
+   "worldId": "demo",
+   "from": "n_gen_8",
+   "to": "n_gen_7",
+   "relation": "part-of",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_12",
+   "worldId": "demo",
+   "from": "n_gen_29",
+   "to": "n_gen_38",
+   "relation": "part-of",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_13",
+   "worldId": "demo",
+   "from": "n_gen_49",
+   "to": "n_gen_36",
+   "relation": "member-of",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_14",
+   "worldId": "demo",
+   "from": "n_gen_49",
+   "to": "n_gen_46",
+   "relation": "member-of",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_15",
+   "worldId": "demo",
+   "from": "n_gen_11",
+   "to": "n_gen_0",
+   "relation": "part-of",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_16",
+   "worldId": "demo",
+   "from": "n_gen_54",
+   "to": "n_gen_21",
+   "relation": "bonded-to",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_17",
+   "worldId": "demo",
+   "from": "n_gen_23",
+   "to": "n_gen_16",
+   "relation": "part-of",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_18",
+   "worldId": "demo",
+   "from": "n_gen_24",
+   "to": "n_gen_5",
+   "relation": "appears-in",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_19",
+   "worldId": "demo",
+   "from": "n_gen_2",
+   "to": "n_gen_0",
+   "relation": "part-of",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_20",
+   "worldId": "demo",
+   "from": "n_gen_12",
+   "to": "n_gen_8",
+   "relation": "references",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_21",
+   "worldId": "demo",
+   "from": "n_gen_56",
+   "to": "n_gen_51",
+   "relation": "member-of",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_22",
+   "worldId": "demo",
+   "from": "n_gen_50",
+   "to": "n_gen_59",
+   "relation": "member-of",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_23",
+   "worldId": "demo",
+   "from": "n_gen_32",
+   "to": "n_gen_12",
+   "relation": "bonded-to",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_24",
+   "worldId": "demo",
+   "from": "n_gen_59",
+   "to": "n_gen_45",
+   "relation": "rules",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_25",
+   "worldId": "demo",
+   "from": "n_gen_12",
+   "to": "n_gen_0",
+   "relation": "references",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_26",
+   "worldId": "demo",
+   "from": "n_gen_2",
+   "to": "n_gen_4",
+   "relation": "part-of",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_27",
+   "worldId": "demo",
+   "from": "n_gen_43",
+   "to": "n_gen_33",
+   "relation": "references",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_28",
+   "worldId": "demo",
+   "from": "n_gen_25",
+   "to": "n_gen_20",
+   "relation": "part-of",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_29",
+   "worldId": "demo",
+   "from": "n_gen_42",
+   "to": "n_gen_22",
+   "relation": "references",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_30",
+   "worldId": "demo",
+   "from": "n_gen_16",
+   "to": "n_gen_57",
+   "relation": "rules",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_31",
+   "worldId": "demo",
+   "from": "n_gen_14",
+   "to": "n_gen_21",
+   "relation": "part-of",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_32",
+   "worldId": "demo",
+   "from": "n_gen_27",
+   "to": "n_gen_23",
+   "relation": "part-of",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_33",
+   "worldId": "demo",
+   "from": "n_gen_23",
+   "to": "n_gen_24",
+   "relation": "part-of",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_34",
+   "worldId": "demo",
+   "from": "n_gen_27",
+   "to": "n_gen_22",
+   "relation": "part-of",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_35",
+   "worldId": "demo",
+   "from": "n_gen_35",
+   "to": "n_gen_29",
+   "relation": "part-of",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_36",
+   "worldId": "demo",
+   "from": "n_gen_33",
+   "to": "n_gen_15",
+   "relation": "references",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_37",
+   "worldId": "demo",
+   "from": "n_gen_8",
+   "to": "n_gen_10",
+   "relation": "part-of",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_38",
+   "worldId": "demo",
+   "from": "n_gen_58",
+   "to": "n_gen_50",
+   "relation": "bonded-to",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_39",
+   "worldId": "demo",
+   "from": "n_gen_29",
+   "to": "n_gen_28",
+   "relation": "part-of",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_40",
+   "worldId": "demo",
+   "from": "n_gen_15",
+   "to": "n_gen_7",
+   "relation": "located-at",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_41",
+   "worldId": "demo",
+   "from": "n_gen_49",
+   "to": "n_gen_47",
+   "relation": "member-of",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_42",
+   "worldId": "demo",
+   "from": "n_gen_48",
+   "to": "n_gen_58",
+   "relation": "bonded-to",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_43",
+   "worldId": "demo",
+   "from": "n_gen_44",
+   "to": "n_gen_42",
+   "relation": "references",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_44",
+   "worldId": "demo",
+   "from": "n_gen_56",
+   "to": "n_gen_59",
+   "relation": "member-of",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_45",
+   "worldId": "demo",
+   "from": "n_gen_54",
+   "to": "n_gen_59",
+   "relation": "bonded-to",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_46",
+   "worldId": "demo",
+   "from": "n_gen_58",
+   "to": "n_gen_53",
+   "relation": "bonded-to",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_47",
+   "worldId": "demo",
+   "from": "n_gen_56",
+   "to": "n_gen_58",
+   "relation": "member-of",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_48",
+   "worldId": "demo",
+   "from": "n_gen_5",
+   "to": "n_gen_0",
+   "relation": "references",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_49",
+   "worldId": "demo",
+   "from": "n_gen_43",
+   "to": "n_gen_30",
+   "relation": "references",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_50",
+   "worldId": "demo",
+   "from": "n_gen_32",
+   "to": "n_gen_14",
+   "relation": "bonded-to",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_51",
+   "worldId": "demo",
+   "from": "n_gen_29",
+   "to": "n_gen_16",
+   "relation": "part-of",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_52",
+   "worldId": "demo",
+   "from": "n_gen_40",
+   "to": "n_gen_39",
+   "relation": "rules",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_53",
+   "worldId": "demo",
+   "from": "n_gen_1",
+   "to": "n_gen_0",
+   "relation": "part-of",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_54",
+   "worldId": "demo",
+   "from": "n_gen_22",
+   "to": "n_gen_6",
+   "relation": "appears-in",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_55",
+   "worldId": "demo",
+   "from": "n_gen_8",
+   "to": "n_gen_16",
+   "relation": "part-of",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_56",
+   "worldId": "demo",
+   "from": "n_gen_25",
+   "to": "n_gen_13",
+   "relation": "part-of",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_57",
+   "worldId": "demo",
+   "from": "n_gen_28",
+   "to": "n_gen_39",
+   "relation": "references",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_58",
+   "worldId": "demo",
+   "from": "n_gen_19",
+   "to": "n_gen_27",
+   "relation": "references",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_59",
+   "worldId": "demo",
+   "from": "n_gen_51",
+   "to": "n_gen_37",
+   "relation": "references",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_60",
+   "worldId": "demo",
+   "from": "n_gen_29",
+   "to": "n_gen_14",
+   "relation": "part-of",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_61",
+   "worldId": "demo",
+   "from": "n_gen_18",
+   "to": "n_gen_7",
+   "relation": "references",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_62",
+   "worldId": "demo",
+   "from": "n_gen_4",
+   "to": "n_gen_20",
+   "relation": "rules",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_63",
+   "worldId": "demo",
+   "from": "n_gen_56",
+   "to": "n_gen_54",
+   "relation": "member-of",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_64",
+   "worldId": "demo",
+   "from": "n_gen_7",
+   "to": "n_gen_5",
+   "relation": "part-of",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_65",
+   "worldId": "demo",
+   "from": "n_gen_32",
+   "to": "n_gen_19",
+   "relation": "bonded-to",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_66",
+   "worldId": "demo",
+   "from": "n_gen_40",
+   "to": "n_gen_22",
+   "relation": "rules",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_67",
+   "worldId": "demo",
+   "from": "n_gen_1",
+   "to": "n_gen_4",
+   "relation": "part-of",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_68",
+   "worldId": "demo",
+   "from": "n_gen_59",
+   "to": "n_gen_49",
+   "relation": "rules",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_69",
+   "worldId": "demo",
+   "from": "n_gen_53",
+   "to": "n_gen_34",
+   "relation": "part-of",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_70",
+   "worldId": "demo",
+   "from": "n_gen_42",
+   "to": "n_gen_57",
+   "relation": "references",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_71",
+   "worldId": "demo",
+   "from": "n_gen_10",
+   "to": "n_gen_0",
+   "relation": "bonded-to",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_72",
+   "worldId": "demo",
+   "from": "n_gen_22",
+   "to": "n_gen_40",
+   "relation": "appears-in",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_73",
+   "worldId": "demo",
+   "from": "n_gen_23",
+   "to": "n_gen_19",
+   "relation": "part-of",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_74",
+   "worldId": "demo",
+   "from": "n_gen_30",
+   "to": "n_gen_20",
+   "relation": "member-of",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_75",
+   "worldId": "demo",
+   "from": "n_gen_19",
+   "to": "n_gen_12",
+   "relation": "references",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_76",
+   "worldId": "demo",
+   "from": "n_gen_36",
+   "to": "n_gen_43",
+   "relation": "member-of",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_77",
+   "worldId": "demo",
+   "from": "n_gen_21",
+   "to": "n_gen_31",
+   "relation": "part-of",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_78",
+   "worldId": "demo",
+   "from": "n_gen_45",
+   "to": "n_gen_32",
+   "relation": "references",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_79",
+   "worldId": "demo",
+   "from": "n_gen_46",
+   "to": "n_gen_59",
+   "relation": "member-of",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_80",
+   "worldId": "demo",
+   "from": "n_gen_43",
+   "to": "n_gen_28",
+   "relation": "references",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_81",
+   "worldId": "demo",
+   "from": "n_gen_42",
+   "to": "n_gen_48",
+   "relation": "references",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_82",
+   "worldId": "demo",
+   "from": "n_gen_47",
+   "to": "n_gen_49",
+   "relation": "part-of",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_83",
+   "worldId": "demo",
+   "from": "n_gen_1",
+   "to": "n_gen_12",
+   "relation": "part-of",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_84",
+   "worldId": "demo",
+   "from": "n_gen_35",
+   "to": "n_gen_16",
+   "relation": "part-of",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_85",
+   "worldId": "demo",
+   "from": "n_gen_15",
+   "to": "n_gen_0",
+   "relation": "located-at",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_86",
+   "worldId": "demo",
+   "from": "n_gen_36",
+   "to": "n_gen_16",
+   "relation": "member-of",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_87",
+   "worldId": "demo",
+   "from": "n_gen_7",
+   "to": "n_gen_3",
+   "relation": "part-of",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_88",
+   "worldId": "demo",
+   "from": "n_gen_56",
+   "to": "n_gen_37",
+   "relation": "member-of",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  },
+  {
+   "id": "e_gen_89",
+   "worldId": "demo",
+   "from": "n_gen_44",
+   "to": "n_gen_52",
+   "relation": "references",
+   "canon": {
+    "status": "draft"
+   },
+   "createdBy": {
+    "harness": "importer",
+    "at": "2026-11-25T00:00:00.000Z"
+   },
+   "updatedAt": "2026-11-25T00:00:00.000Z",
+   "version": 1,
+   "meta": {}
+  }
+ ]
+}

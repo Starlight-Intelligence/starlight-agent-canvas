@@ -8,6 +8,8 @@ export default defineConfig({
   use: {
     baseURL: 'http://127.0.0.1:3100',
     trace: 'on-first-retry',
+    // Lets a preinstalled Chromium stand in when the pinned browser build is not downloaded.
+    ...(process.env.PW_CHROMIUM ? { launchOptions: { executablePath: process.env.PW_CHROMIUM } } : {}),
   },
   webServer: {
     command: 'pnpm build && pnpm --filter @starlight-agent-canvas/web start -p 3100',
@@ -18,6 +20,7 @@ export default defineConfig({
       AGENT_CANVAS_HOME: '.agent-canvas/test-e2e',
       STARLIGHT_CONTINUITY_CLI: path.resolve('tests/fixtures/continuity-cli.mjs'),
       CONTINUITY_FIXTURE_MODE_FILE: path.resolve('.continuity-fixture-mode'),
+      STARLIGHT_WORLD_DIR: path.resolve('tests/fixtures/worlds'),
     },
   },
   projects: [
