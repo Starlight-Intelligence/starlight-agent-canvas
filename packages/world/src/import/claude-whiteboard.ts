@@ -3,6 +3,7 @@ import { edgeIdFor, hash53, slugify, stableId } from '../ids.js';
 import {
   LIMITS,
   nodeKindSchema,
+  safeLinkHrefSchema,
   WORLD_GRAPH_SCHEMA_VERSION,
   type Actor,
   type Bounds,
@@ -108,7 +109,7 @@ export interface ImportOptions {
 export type ElementDisposition =
   | { as: 'node'; nodeId: string }
   | { as: 'merged'; into: string; role: string }
-  | { as: 'expanded'; nodeIds: string[] }
+  | { as: 'expanded'; nodeIds: string[]; /** Names on the line that did not become nodes. */ dropped?: string[] }
   | { as: 'edge'; edgeId: string }
   | { as: 'region'; regionId: string; nodeId: string }
   | { as: 'skipped'; reason: string };
@@ -616,18 +617,25 @@ export function importClaudeWhiteboard(input: unknown, options: ImportOptions = 
     } else {
       domain = pair;
     }
+    // Only "God × Godbeast" is understood. Keep any extra names on the gate
+    // and report the line instead of dropping them.
+    const extraNames = names.length > 2 ? names.slice(2) : [];
+    if (extraNames.length > 0 && pair) {
+      warnings.push(`Gate "${gateName}" (${heading.key}): line ${pair.key} has ${names.length} names; used the first two, kept the full line in the gate body.`);
+    }
     const regionId = regionIdOf(heading);
     const gate = addNode({
       key: heading.key,
       kind: 'gate',
       title: `${gateName} Gate`,
       summary: domain?.text?.trim() ?? '',
+      body: extraNames.length > 0 && pair ? pair.text!.trim() : undefined,
       tags: ['gate', `gate-${String(number).padStart(2, '0')}`],
       position: { x: heading.x ?? 0, y: heading.y ?? 0 },
       size: { w: heading.wrap ?? 430, h: 140 },
       regionId,
       elementIds: [heading.key, ...(domain ? [domain.key] : [])],
-      extraMeta: { gate: { number, name: gateName } },
+      extraMeta: { gate: { number, name: gateName, ...(extraNames.length > 0 ? { unexpandedNames: extraNames } : {}) } },
       mentionable: true,
     });
     disposition.set(heading.key, { as: 'node', nodeId: gate.id });
@@ -668,7 +676,7 @@ export function importClaudeWhiteboard(input: unknown, options: ImportOptions = 
       } else {
         warnings.push(`Gate "${gateName}" (${heading.key}) lists a god but no godbeast.`);
       }
-      disposition.set(pair.key, { as: 'expanded', nodeIds: created });
+      disposition.set(pair.key, extraNames.length > 0 ? { as: 'expanded', nodeIds: created, dropped: extraNames } : { as: 'expanded', nodeIds: created });
     } else {
       warnings.push(`Gate "${gateName}" (${heading.key}) has no "God × Godbeast" line.`);
     }
@@ -831,8 +839,11 @@ export function importClaudeWhiteboard(input: unknown, options: ImportOptions = 
       || (depictedNode
         ? `${depictedNode.title} ${isPlaceholder ? 'placeholder' : 'plate'}`
         : role === 'cover' ? `${worldTitle} cover` : `${regionTitleOf(img) || worldTitle} image`);
-    const href = safeUrl(img.href);
-    if (img.href && !href) warnings.push(`Image ${img.key} has a non-http href; kept in meta only.`);
+    // Use the same validator as the schema, so a link the schema would reject
+    // (non-http, or over its length cap) never aborts the import.
+    const normalizedHref = safeUrl(img.href);
+    const href = normalizedHref && safeLinkHrefSchema.safeParse(normalizedHref).success ? normalizedHref : undefined;
+    if (img.href && !href) warnings.push(`Image ${img.key} has an href the schema does not accept (non-http or too long); kept in meta only.`);
     const media: Media[] = [];
     let oversizedSrc: { length: number; hash53: string; prefix: string } | undefined;
     if (img.src && img.src.length > ORIGINAL_SRC_MAX) {
