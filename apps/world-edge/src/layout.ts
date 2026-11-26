@@ -1,7 +1,8 @@
 import type { Bounds, WorldEdge, WorldNode } from '@starlight-agent-canvas/world';
 
-export const LAYOUT_STRATEGIES = ['grid', 'layered', 'force'] as const;
-export type LayoutStrategy = (typeof LAYOUT_STRATEGIES)[number];
+import { LAYOUT_STRATEGIES, type LayoutStrategy } from '@starlight-agent-canvas/world';
+
+export { LAYOUT_STRATEGIES, type LayoutStrategy };
 
 export interface Move {
   id: string;

@@ -2,7 +2,7 @@
 
 Status: written by lane L5 on 2026-11-25 for issue #63. It mirrors L2's server on branch `agent/claude-cloud/world-edge` at commit 161c054 (`apps/world-edge/src/tools.ts`, `mcp.ts`, `world-agent.ts`, `region.ts`, `indexing.ts`, `store.ts`). L2's code is the authority for the server; spec section 8 names the tools but not the exact shapes. If L2 changes a shape, `@starlight-agent-canvas/world-agents` must change with it, because the client validates every result.
 
-The client's copy of this contract is `packages/world-agents/src/client/tools.ts` (`WORLD_TOOLS`). Entity schemas (`WorldNode`, `WorldEdge`, `World`, `Actor`, ops) are L1's, from `packages/world`.
+Input schemas are shared with the server from `packages/world/src/tools.ts` (`WORLD_TOOL_INPUTS`). The client's output schemas are in `packages/world-agents/src/client/tools.ts` (`WORLD_TOOLS`). Entity schemas (`WorldNode`, `WorldEdge`, `World`, `Actor`, ops) are L1's, from `packages/world`.
 
 ## Transport
 
@@ -22,7 +22,7 @@ Every input is a strict object (unknown keys rejected) and every tool takes `wor
 | `get_world` | `{worldId}` |
 | `get_region` | `{worldId, regionId?, bounds?, level?, zoom?, kinds?, limit?}`: at least one of `regionId` or `bounds`; `level` is `cluster`, `card` or `full` (server default `card`, or derived from `zoom`); `kinds` NodeKind[]; `limit` 1..5000 |
 | `search` | `{worldId, query (1..500), kinds?, limit? (1..50, server default 20)}` |
-| `add_node` | `{worldId, node}`: L1's `nodeInputSchema` with `id` optional (the server makes one with `newId('n', title)`); `regionId` is inside `node` |
+| `add_node` | `{worldId, node}`: L1's `nodeInputSchema` without `canon` and with `id` optional (the server makes one with `newId('n', title)`); `regionId` is inside `node` |
 | `update_node` | `{worldId, id, baseVersion, patch}` with L1's `nodePatchSchema` |
 | `link` | `{worldId, from, to, relation, label?}` (the client also rejects `from` equal to `to`, which L1's op rejects anyway) |
 | `move` | `{worldId, moves: [{id, baseVersion, position, regionId?}]}` (1..5000) |
@@ -37,7 +37,7 @@ Unknown extra keys on objects are ignored, so additive server fields are safe.
 | Tool | Output |
 | --- | --- |
 | `get_world` | `{world: World, counts: {nodes, edges, nodesByKind: Record<string, int>, edgesByRelation: Record<string, int>}, openProposals}` |
-| `get_region` | `{ok: true, version, level, bounds, regions, clusters: [{tile, count, byKind, center: {x, y}}], nodes, edges, truncated}` |
+| `get_region` | `{ok: true, version, level, bounds, regions, clusters: [{tile, count, byKind, center: {x, y}}], nodes, edges, truncated, nodesTruncated, edgesTruncated}` |
 | `search` | `{mode: "semantic", "d1-like" or "do-like", hits: [{id, kind, title, summary, position, regionId, score?}]}` |
 | `add_node`, `update_node`, `link`, `move` | WriteResult: `{ok: true, version, seq, nodes: WorldNode[], edges: WorldEdge[], removedNodes, removedEdges, proposals: CanonProposal[]}` |
 | `propose_canon` | WriteResult plus `proposalId` |
@@ -66,11 +66,13 @@ Input that fails the server's own zod schema is rejected by the MCP SDK before L
 
 HTTP 401 and 403 throw `WorldAuthError`. Other non-2xx responses, such as L2's `AUTH_UNAVAILABLE` (a 5xx when Access keys cannot be loaded), throw `WorldTransportError` with the status, and the server's code appears only in the message.
 
-## Differences from spec section 8 worth a decision (L1 and L2)
+## Differences from spec section 8 (settled in the integration branch)
 
-- `search` returns no world version and `get_world` has it only inside `world`; spec 8 says every tool response includes it.
-- `propose_canon` takes `title`, `targets` and `rationale` and opens no PR; spec 8 lists `target, baseVersion, note` and a PR URL.
-- `import_whiteboard` requires `worldId` and only seeds an empty world; spec 8 says it writes a new world or a draft branch.
-- `add_node` accepts `canon: {status: "proposed"}` (L1's `nodeInputSchema` allows it), which marks a node proposed without a proposal row, so it never reaches the PR flow (spec 3.5).
-- Error codes for bad input differ by tool (`INVALID_INPUT` in `get_region`, `INVALID_OP` elsewhere), and importing into a non-empty world returns `DUPLICATE_ID`.
-- Moving the tool schemas into `packages/world` would let the server and this client import one definition instead of keeping two copies in step.
+These were open when this file was written. The integration branch (`agent/claude-cloud/world-integration`, issue #63) settled them as follows:
+
+- Versions: spec section 8 now says write tools and `get_region` carry top-level `version`, `get_world` carries `world.version`, and `search` carries none. Spec changed to match the server.
+- `propose_canon`: spec now documents `{title, targets, rationale}`, a proposal row, `proposalId` and no PR URL. Spec changed to match the server.
+- `import_whiteboard`: spec now documents `worldId` and "seeds an empty world only". Spec changed to match the server.
+- `add_node` with `canon: proposed`: the server changed. The shared `add_node` input has no `canon` field, so MCP nodes start as drafts and `propose_canon` is the only way to `proposed`.
+- Error codes: documented in spec section 8 as they are (`INVALID_INPUT` and `BOUNDS_TOO_LARGE` in `get_region`, L1 codes elsewhere, `DUPLICATE_ID` for import into a non-empty world).
+- Tool input schemas now live in `packages/world/src/tools.ts`. `apps/world-edge/src/tools.ts` re-exports them and this client imports them; output schemas stay here.

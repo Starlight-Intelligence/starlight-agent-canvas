@@ -456,6 +456,12 @@ describe('canon gate', () => {
     });
   });
 
+  it('add_node cannot carry canon status "proposed" either (propose_canon records the proposal)', async () => {
+    await rejectsInput('addNode', {
+      node: { kind: 'god', title: 'Nero', position: { x: 0, y: 0 }, canon: { status: 'proposed' } },
+    });
+  });
+
   it('update_node patch cannot carry canon, version or createdBy', async () => {
     await rejectsInput('updateNode', { id: 'n_arion', baseVersion: 1, patch: { title: 'Arion', canon: { status: 'canon', ref: 'https://example.com/pr/1' } } });
     await rejectsInput('updateNode', { id: 'n_arion', baseVersion: 1, patch: { version: 99 } });

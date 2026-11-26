@@ -21,7 +21,7 @@
     "dev": "pnpm --filter @starlight-agent-canvas/core build && pnpm --filter @starlight-agent-canvas/world build && pnpm --filter @starlight-agent-canvas/web dev",
     "build": "pnpm --filter @starlight-agent-canvas/core build && pnpm --filter @starlight-agent-canvas/world build && pnpm --filter @starlight-agent-canvas/mcp build && pnpm --filter @starlight-agent-canvas/web build",
     "typecheck": "pnpm --filter @starlight-agent-canvas/core build && pnpm --filter @starlight-agent-canvas/world build && pnpm -r typecheck",
-    "test": "pnpm --filter @starlight-agent-canvas/core test && pnpm --filter @starlight-agent-canvas/world test && pnpm --filter @starlight-agent-canvas/core build && pnpm --filter @starlight-agent-canvas/mcp test && pnpm --filter @starlight-agent-canvas/world build && pnpm --filter @starlight-agent-canvas/web test && pnpm world-edge:test",
+    "test": "pnpm --filter @starlight-agent-canvas/core test && pnpm --filter @starlight-agent-canvas/world test && pnpm --filter @starlight-agent-canvas/core build && pnpm --filter @starlight-agent-canvas/mcp test && pnpm --filter @starlight-agent-canvas/world build && pnpm --filter @starlight-agent-canvas/web test && pnpm world-edge:test && pnpm --filter @starlight-agent-canvas/world-agents test",
     "verify": "pnpm typecheck && pnpm test && pnpm build",
     "start": "pnpm build && pnpm --filter @starlight-agent-canvas/web start",
     "preview:prod": "pnpm build && pnpm --filter @starlight-agent-canvas/web start -p 3101",

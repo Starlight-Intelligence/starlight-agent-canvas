@@ -237,21 +237,28 @@ World content does not live in this public repo. The Arcanea world and its lexic
 
 ## 8. MCP tools for L2
 
-All tools act on one world. Writes go through `applyOps`; none can set canon.
+All tools act on one world and take `worldId`. Writes go through `applyOps`; none can set canon. The input schemas are defined once in `packages/world/src/tools.ts` (`WORLD_TOOL_INPUTS`); the server (`apps/world-edge`) registers them and the client (`packages/world-agents`) validates with them. Every input is a strict object. The client's view of outputs and errors is in [tool-contract.md](./tool-contract.md).
 
 | Tool | Input | Output | Maps to |
 | --- | --- | --- | --- |
-| `get_world` | `worldId` | world record (title, version, regions), node and edge counts by kind | read |
-| `get_region` | `worldId, regionId` or `bounds`, `level?` | nodes and edges in the region or bounds, at the given zoom level | read via tiles |
-| `search` | `worldId, query, kinds?, limit?` | ranked `{id, kind, title, summary, position, regionId}` | D1 FTS + Vectorize |
-| `add_node` | node input (id optional), `regionId?` | created node | `addNode` |
-| `update_node` | `id, baseVersion, patch` | updated node | `updateNode` |
-| `link` | `from, to, relation, label?` | created edge | `addEdge` |
-| `move` | `moves: [{id, baseVersion, position, regionId?}]` | moved nodes | `moveNodes` |
-| `propose_canon` | `target, baseVersion, note` | proposal and PR URL once opened | `proposeCanon` + PR to arcanea-ai-app |
-| `layout_region` | `worldId, regionId, strategy` (`grid`, `layered`, `force`) | moves applied | computes positions, then `moveNodes` |
-| `import_whiteboard` | whiteboard JSON, `lexicon?` | import report; writes a new world or a draft branch | `importClaudeWhiteboard` |
+| `get_world` | `worldId` | `{world, counts: {nodes, edges, nodesByKind, edgesByRelation}, openProposals}` | read |
+| `get_region` | `worldId`, `regionId` or `bounds`, `level?`, `zoom?`, `kinds?`, `limit?` (max 5000) | `{ok, version, level, bounds, regions, clusters, nodes, edges, truncated, nodesTruncated, edgesTruncated}` at the given zoom level | read via tiles |
+| `search` | `worldId, query, kinds?, limit?` (max 50) | `{mode, hits: [{id, kind, title, summary, position, regionId, score?}]}`; `mode` is `semantic`, `d1-like` or `do-like` | Vectorize, then D1, then the Durable Object |
+| `add_node` | `worldId, node` (node input with `id` optional, `regionId` inside `node`, no `canon`) | WriteResult | `addNode` |
+| `update_node` | `worldId, id, baseVersion, patch` | WriteResult | `updateNode` |
+| `link` | `worldId, from, to, relation, label?` (`from` must differ from `to`) | WriteResult | `addEdge` |
+| `move` | `worldId, moves: [{id, baseVersion, position, regionId?}]` | WriteResult | `moveNodes` |
+| `propose_canon` | `worldId, title, targets: [{type, id, baseVersion}] (1..100), rationale` | WriteResult plus `proposalId` | `proposeCanon` per target, plus a `canon_proposals` row |
+| `layout_region` | `worldId, regionId, strategy` (`grid`, `layered`, `force`) | WriteResult plus `moved` | computes positions, then `moveNodes` |
+| `import_whiteboard` | `worldId, whiteboard, lexicon?, title?, dryRun?` | `{ok, version, seq, report}`, or `{ok, dryRun: true, report}` | `importClaudeWhiteboard`; seeds an empty world only |
+
+WriteResult is `{ok: true, version, seq, nodes, edges, removedNodes, removedEdges, proposals}`.
 
 Not exposed as tools: `removeNode` and `removeEdge` stay UI-only in v1 because MCP tools here are non-destructive; `promoteToCanon` is git-sync only.
 
-Every tool response includes the new `world.version`. Every write tool returns `STALE_VERSION` details on conflict so the agent can re-read and retry.
+Versions: write tools and `get_region` return the world version after the call as top-level `version`; `get_world` returns it as `world.version`. `search` returns no version, because its hits can come from an index that lags the Durable Object; read with `get_region` at `full` before editing.
+
+Canon through MCP: `add_node` creates drafts only. `propose_canon` is the one way to reach `proposed`; it records a proposal row, which the canon PR flow (`canon-pr` in `packages/world-agents`) turns into a draft PR. The tool itself opens no PR and returns no PR URL. A node created with `canon: proposed` through MCP would have no proposal row and would never reach that flow, so the tool input does not take `canon`. The local browser ops route uses the `addNode` op directly and still follows section 3.
+
+Errors: a failed write returns `isError: true` with `{ok: false, version, error: {code, message, opIndex?, id?, expectedVersion?, actualVersion?}}`. Codes are L1's `OpErrorCode` values plus `INVALID_INPUT` and `BOUNDS_TOO_LARGE` from `get_region`. Input that fails the shared schema is rejected by the MCP SDK before the tool runs. `import_whiteboard` into a world that already has nodes returns `DUPLICATE_ID`. Write tools return `STALE_VERSION` details on conflict so the agent can re-read and retry.
+

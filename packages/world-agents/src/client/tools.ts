@@ -1,32 +1,54 @@
 import { z } from 'zod';
 import {
   actorSchema,
-  addEdgeOpSchema,
+  addNodeInputSchema,
+  addNodeNodeInputSchema,
   boundsSchema,
-  claudeWhiteboardSchema,
   entityIdSchema,
+  getRegionInputSchema,
+  getWorldInputSchema,
+  importLexiconInputSchema,
+  importWhiteboardInputSchema,
+  LAYOUT_STRATEGIES,
+  layoutRegionInputSchema,
   LIMITS,
+  linkInputSchema,
   mediaSchema,
-  moveNodesOpSchema,
-  NODE_KINDS,
-  nodeInputSchema,
-  nodeKindSchema,
-  nodePatchSchema,
+  moveInputSchema,
   positionSchema,
-  proposeCanonOpSchema,
+  proposeCanonInputSchema,
+  proposeCanonTargetSchema,
   regionSchema,
+  searchInputSchema,
   SEMANTIC_ZOOM_LEVELS,
-  updateNodeOpSchema,
+  updateNodeInputSchema,
+  WORLD_TOOL_LIMITS,
   worldEdgeSchema,
-  worldIdSchema,
   worldNodeSchema,
   worldSchema,
 } from '@starlight-agent-canvas/world';
 
+/** Input schemas come from L1 (`packages/world/src/tools.ts`), shared with the server. */
+export {
+  addNodeInputSchema,
+  addNodeNodeInputSchema,
+  getRegionInputSchema,
+  getWorldInputSchema,
+  importWhiteboardInputSchema,
+  LAYOUT_STRATEGIES,
+  layoutRegionInputSchema,
+  linkInputSchema,
+  moveInputSchema,
+  proposeCanonInputSchema,
+  proposeCanonTargetSchema,
+  searchInputSchema,
+  updateNodeInputSchema,
+};
+
 /**
- * Client-side contract for the World Canvas MCP tools, matching the L2 server
- * (apps/world-edge: src/tools.ts for inputs, src/mcp.ts and
- * src/world-agent.ts for results).
+ * Client-side contract for the World Canvas MCP tools. Inputs are L1's shared
+ * schemas (packages/world/src/tools.ts), the same ones the L2 server
+ * registers. Outputs match apps/world-edge src/mcp.ts and src/world-agent.ts.
  *
  * Input schemas are strict: unknown keys are rejected so a typo, or an
  * attempt to smuggle `canon`, `version` or `createdBy`, fails locally before
@@ -38,13 +60,8 @@ import {
  * There is deliberately no tool for removeNode, removeEdge or promoteToCanon.
  */
 
-/** Server-side limits from apps/world-edge that shape tool inputs. */
-export const WORLD_EDGE_LIMITS = {
-  /** REGION_LIMITS.maxNodes in apps/world-edge/src/region.ts. */
-  regionMaxNodes: 5_000,
-  searchMaxLimit: 50,
-  proposalTargetsMax: 100,
-} as const;
+/** Server-side limits that shape tool inputs (shared with apps/world-edge through L1). */
+export const WORLD_EDGE_LIMITS = WORLD_TOOL_LIMITS;
 
 const versionSchema = z.number().int().nonnegative();
 const countSchema = z.number().int().nonnegative();
@@ -85,10 +102,6 @@ export const writeResultSchema = z.object({
 
 // get_world
 
-export const getWorldInputSchema = z.strictObject({
-  worldId: worldIdSchema,
-});
-
 export const getWorldOutputSchema = z.object({
   world: worldSchema,
   counts: z.object({
@@ -101,20 +114,6 @@ export const getWorldOutputSchema = z.object({
 });
 
 // get_region
-
-export const getRegionInputSchema = z.strictObject({
-  worldId: worldIdSchema,
-  regionId: entityIdSchema.optional(),
-  bounds: boundsSchema.optional(),
-  /** Wins over zoom when both are set. */
-  level: semanticZoomLevelSchema.optional(),
-  /** Viewport zoom factor; the server maps it to a level when level is not set. */
-  zoom: z.number().finite().positive().optional(),
-  kinds: z.array(nodeKindSchema).max(NODE_KINDS.length).optional(),
-  limit: z.number().int().positive().max(WORLD_EDGE_LIMITS.regionMaxNodes).optional(),
-}).refine((input) => input.regionId !== undefined || input.bounds !== undefined, {
-  message: 'Pass regionId or bounds.',
-});
 
 /** L2's NodeCard: what a card shows. No body, no full media list. */
 export const nodeCardSchema = z.object({
@@ -172,13 +171,6 @@ export const getRegionOutputSchema = z.discriminatedUnion('level', [
 
 // search
 
-export const searchInputSchema = z.strictObject({
-  worldId: worldIdSchema,
-  query: z.string().min(1).max(500),
-  kinds: z.array(nodeKindSchema).max(NODE_KINDS.length).optional(),
-  limit: z.number().int().positive().max(WORLD_EDGE_LIMITS.searchMaxLimit).optional(),
-});
-
 export const SEARCH_MODES = ['semantic', 'd1-like', 'do-like'] as const;
 
 /** L2's SearchHit. The server types id, kind and title as plain strings. */
@@ -199,76 +191,27 @@ export const searchOutputSchema = z.object({
 
 // add_node
 
-/** L1's node input with `id` optional: the server fills it (spec 4.1). */
-export const addNodeNodeInputSchema = nodeInputSchema.extend({
-  id: entityIdSchema.optional(),
-});
-
-export const addNodeInputSchema = z.strictObject({
-  worldId: worldIdSchema,
-  node: addNodeNodeInputSchema,
-});
-
 export const addNodeOutputSchema = writeResultSchema;
 
 // update_node
-
-export const updateNodeInputSchema = z.strictObject({
-  worldId: worldIdSchema,
-  id: updateNodeOpSchema.shape.id,
-  baseVersion: updateNodeOpSchema.shape.baseVersion,
-  patch: nodePatchSchema,
-});
 
 export const updateNodeOutputSchema = writeResultSchema;
 
 // link
 
-/** The server has no self-link check in its schema; applyOps rejects it. The client rejects it locally. */
-export const linkInputSchema = addEdgeOpSchema.shape.edge
-  .pick({ from: true, to: true, relation: true, label: true })
-  .extend({ worldId: worldIdSchema })
-  .refine((input) => input.from !== input.to, { message: 'Edges cannot connect a node to itself.', path: ['to'] });
-
 export const linkOutputSchema = writeResultSchema;
 
 // move
 
-export const moveInputSchema = z.strictObject({
-  worldId: worldIdSchema,
-  moves: moveNodesOpSchema.shape.moves,
-});
-
 export const moveOutputSchema = writeResultSchema;
 
 // propose_canon
-
-/** One target: L1's proposeCanon target plus the version the caller last read. */
-export const proposeCanonTargetSchema = proposeCanonOpSchema.shape.target.extend({
-  baseVersion: proposeCanonOpSchema.shape.baseVersion,
-});
-
-/** No `ref` and no status: the server sets `proposed` and records a proposal row. It opens no PR. */
-export const proposeCanonInputSchema = z.strictObject({
-  worldId: worldIdSchema,
-  title: z.string().min(1).max(LIMITS.titleMax),
-  targets: z.array(proposeCanonTargetSchema).min(1).max(WORLD_EDGE_LIMITS.proposalTargetsMax),
-  rationale: z.string().min(1).max(LIMITS.summaryMax),
-});
 
 export const proposeCanonOutputSchema = writeResultSchema.extend({
   proposalId: z.string().min(1),
 });
 
 // layout_region
-
-export const LAYOUT_STRATEGIES = ['grid', 'layered', 'force'] as const;
-
-export const layoutRegionInputSchema = z.strictObject({
-  worldId: worldIdSchema,
-  regionId: entityIdSchema,
-  strategy: z.enum(LAYOUT_STRATEGIES),
-});
 
 export const layoutRegionOutputSchema = writeResultSchema.extend({
   /** Number of nodes moved. */
@@ -277,23 +220,7 @@ export const layoutRegionOutputSchema = writeResultSchema.extend({
 
 // import_whiteboard
 
-/** L2's lexicon: L1's ImportLexicon with tag strings bounded like node tags. */
-export const importLexiconSchema = z.strictObject({
-  /** Exact title (case-insensitive) to node kind. */
-  kinds: z.record(z.string(), nodeKindSchema).optional(),
-  /** Exact title (case-insensitive) to extra tags. */
-  tags: z.record(z.string(), z.array(z.string().min(1).max(LIMITS.tagMax))).optional(),
-});
-
-/** Seeds an empty world; the server refuses a world that already has content. */
-export const importWhiteboardInputSchema = z.strictObject({
-  worldId: worldIdSchema,
-  whiteboard: claudeWhiteboardSchema,
-  lexicon: importLexiconSchema.optional(),
-  title: z.string().min(1).max(LIMITS.titleMax).optional(),
-  /** Return the import report without writing. */
-  dryRun: z.boolean().optional(),
-});
+export const importLexiconSchema = importLexiconInputSchema;
 
 /** L1's ImportReport, kept loose: the client passes it through. */
 const importReportSchema = z.looseObject({});

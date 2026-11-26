@@ -51,7 +51,7 @@ Nothing in this directory deploys itself. The first deploy, the Cloudflare Acces
 
 ### Canon
 
-Canon is never written here. `applyOps` refuses `canon` in any op, `importGraph` refuses imported canon, and there is no call to `promoteToCanon`. `propose_canon` sets targets to `proposed` through `proposeCanon` ops and inserts a `canon_proposals` row (title, node ids, edge ids, rationale, harness). Turning that row into a draft PR against arcanea-ai-app is a later lane; this Worker never calls GitHub.
+Tool input schemas live in `packages/world/src/tools.ts` and are shared with the client in `packages/world-agents`; `src/tools.ts` here re-exports them. Canon is never written here. `applyOps` refuses `canon` in any op, `importGraph` refuses imported canon, and there is no call to `promoteToCanon`. `propose_canon` sets targets to `proposed` through `proposeCanon` ops and inserts a `canon_proposals` row (title, node ids, edge ids, rationale, harness). Turning that row into a draft PR against arcanea-ai-app is a later lane; this Worker never calls GitHub.
 
 ### Region loading at 100k+ nodes
 
@@ -106,7 +106,7 @@ All tools take `worldId`, validate input with zod schemas built from `packages/w
 | `get_world` | no | world record, regions, counts by kind and relation |
 | `get_region` | no | region or bounds at a zoom level |
 | `search` | no | `mode` says which path answered: `semantic`, `d1-like` or `do-like` |
-| `add_node` | yes | id generated with `newId('n', title)` when omitted |
+| `add_node` | yes | id generated with `newId('n', title)` when omitted; no `canon` field, nodes start as drafts |
 | `update_node` | yes | needs `baseVersion` |
 | `link` | yes | deterministic edge id, so linking twice is `DUPLICATE_ID` |
 | `move` | yes | each move carries `baseVersion` |

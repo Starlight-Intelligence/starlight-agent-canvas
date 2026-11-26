@@ -11,7 +11,8 @@ describe('MCP tool schemas', () => {
   it('add_node accepts a node without id and rejects canon, version and createdBy', () => {
     const base = { worldId: 'arcanea', node: { kind: 'character', title: 'Arion', position: { x: 0, y: 0 } } };
     expect(TOOL_INPUTS.add_node.safeParse(base).success).toBe(true);
-    expect(TOOL_INPUTS.add_node.safeParse({ ...base, node: { ...base.node, canon: { status: 'proposed' } } }).success).toBe(true);
+    // MCP add_node makes drafts only; proposing goes through propose_canon so a proposal row exists (spec 3.5, 8).
+    expect(TOOL_INPUTS.add_node.safeParse({ ...base, node: { ...base.node, canon: { status: 'proposed' } } }).success).toBe(false);
     expect(TOOL_INPUTS.add_node.safeParse({ ...base, node: { ...base.node, canon: { status: 'canon', ref: 'https://x.y/z' } } }).success).toBe(false);
     expect(TOOL_INPUTS.add_node.safeParse({ ...base, node: { ...base.node, version: 9 } }).success).toBe(false);
     expect(TOOL_INPUTS.add_node.safeParse({ ...base, node: { ...base.node, createdBy: { harness: 'human', at: '2026-01-01T00:00:00Z' } } }).success).toBe(false);
