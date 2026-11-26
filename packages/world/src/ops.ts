@@ -160,7 +160,8 @@ export type OpErrorCode =
   | 'STALE_VERSION'
   | 'CANON_FORBIDDEN'
   | 'CANON_LOCKED'
-  | 'INVALID_REFERENCE';
+  | 'INVALID_REFERENCE'
+  | 'VERSION_EXHAUSTED';
 
 export interface OpError {
   code: OpErrorCode;
@@ -304,7 +305,13 @@ export function applyOps(graph: WorldGraph, ops: readonly unknown[], context: Ap
   const proposals: CanonProposal[] = [];
 
   let counter = currentVersionFloor(graph);
-  const bump = (): number => ++counter;
+  const bump = (): number => {
+    // Versions must stay safe integers; refuse rather than wrap or stall.
+    if (counter >= Number.MAX_SAFE_INTEGER) {
+      fail({ code: 'VERSION_EXHAUSTED', message: 'The world version counter is at Number.MAX_SAFE_INTEGER; no further changes can be versioned.' });
+    }
+    return ++counter;
+  };
   const touched = new Set<string>();
   const touch = (kind: 'node' | 'edge', id: string, opIndex: number): void => {
     const key = `${kind}:${id}`;
@@ -439,6 +446,12 @@ export function applyOps(graph: WorldGraph, ops: readonly unknown[], context: Ap
           }
           const attached = incidentEdges(node.id);
           for (const edge of attached) {
+            // The cascade changes each incident edge, so it obeys the
+            // once-per-entity rule too (an edge added or proposed earlier in
+            // this batch cannot be cascaded away by removing its endpoint).
+            if (touched.has(`edge:${edge.id}`)) {
+              fail({ code: 'INVALID_OP', message: `edge ${edge.id} was already changed in this batch; removing node ${node.id} would change it again.`, opIndex, id: edge.id });
+            }
             if (edge.canon.status === 'canon') {
               fail({ code: 'CANON_LOCKED', message: `Node ${node.id} has canon edge ${edge.id}; remove is refused.`, opIndex, id: edge.id });
             }
@@ -578,7 +591,9 @@ export function promoteToCanon(
   if (!refCheck.success) throw new Error('promoteToCanon requires an https ref to the merged canon source.');
   const stamp = actorSchema.parse(actor);
   const canon: Canon = { status: 'canon', ref };
-  const version = currentVersionFloor(graph) + 1;
+  const floor = currentVersionFloor(graph);
+  if (floor >= Number.MAX_SAFE_INTEGER) throw new Error('promoteToCanon: the world version counter is exhausted.');
+  const version = floor + 1;
   if (target.type === 'node') {
     let found = false;
     const nodes = graph.nodes.map((node) => {
