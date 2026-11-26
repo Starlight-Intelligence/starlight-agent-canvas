@@ -25,7 +25,7 @@ Rules:
 
 - `schemaVersion` is the literal `starlight.worldGraph.v1`. Only additive, optional fields may be added under v1. Anything else needs v2.
 - All timestamps are ISO 8601 UTC datetimes.
-- `world.version` is the graph revision. It goes up by 1 on every accepted op batch.
+- `world.version` is the world-wide version counter: the highest version issued to any change. Every accepted change takes the next value (section 4).
 
 ### 2.1 Ids
 
@@ -47,7 +47,7 @@ Generated ids have the form `<prefix>_<slug>_<token>` or `<prefix>_<token>`, pre
 | `id` | world id | |
 | `title` | string 1..300 | |
 | `summary` | string 0..2000 | default `""` |
-| `version` | int >= 0 | graph revision |
+| `version` | int >= 0 | world-wide version counter |
 | `regions` | Region[] | max 4096 |
 | `updatedAt` | datetime | |
 
@@ -81,7 +81,7 @@ Regions are authored areas (sections of the map). They are not the loading unit;
 | `layer` | int -1000..1000 | draw order, default 0 |
 | `createdBy` | `{harness, at, actor?}` | stamped by the server |
 | `updatedAt` | datetime | |
-| `version` | int >= 1 | starts at 1, +1 on every accepted change |
+| `version` | int >= 1 | counter value at this node's last change; never reused |
 | `meta` | object | provenance and extensions, not rendered as content |
 
 NodeKind: `world`, `region`, `story`, `book`, `chapter`, `scene`, `character`, `place`, `faction`, `artifact`, `event`, `house`, `gate`, `god`, `godbeast`, `concept`, `note`, `image`.
@@ -98,7 +98,7 @@ NodeKind: `world`, `region`, `story`, `book`, `chapter`, `scene`, `character`, `
 | `needsReupload` | boolean | true when only `originalSrc` is known |
 | `alt` | string | default `""` |
 | `role` | `cover`, `portrait`, `plate`, `illustration`, `reference`, `placeholder`, `attachment` | |
-| `href` | URL | where the media links to (source doc, Figma frame) |
+| `href` | http(s) URL | where the media links to (source doc, Figma frame) |
 | `width`, `height` | number > 0 | optional |
 
 A media entry must have `r2Key`, or `url`, or `originalSrc` with `needsReupload: true`.
@@ -129,7 +129,7 @@ Direction reads as a sentence: `god rules gate`, `character appears-in scene`, `
 ## 3. Canon gate
 
 1. Canon lives in git. For Arcanea that is `arcanea-ai-app/.arcanea/lore/CANON_LOCKED.md` and the files it points to.
-2. `canon.status` is one of `draft`, `proposed`, `canon`. `canon` requires `canon.ref`, a link to the merged canon source.
+2. `canon.status` is one of `draft`, `proposed`, `canon`. `canon` requires `canon.ref`, a link to the merged canon source. `canon.ref` must be an http(s) URL.
 3. No op can produce `canon`. Add ops accept `draft` or `proposed` only. An op that carries `canon.status: "canon"` anywhere is rejected with `CANON_FORBIDDEN`.
 4. Nodes and edges with status `canon` cannot be updated or removed through ops (`CANON_LOCKED`). A node with a canon edge cannot be removed. Canon nodes may be moved; layout is not canon.
 5. `proposeCanon` sets status `proposed` and returns a `CanonProposal`. L2 turns each proposal into a draft PR against `arcanea-ai-app` and writes the PR URL back as `canon.ref` with a follow-up `proposeCanon` (same target, `ref` set).
@@ -144,25 +144,28 @@ Clients change a world only by sending a batch of ops. The server applies them w
 applyOps(graph: WorldGraph, ops: unknown[], { actor }: { actor: Actor }): ApplyResult
 ```
 
-- Pure. The input graph is never mutated. Unchanged nodes and edges are shared with the result. Cost is O(nodes + edges + ops).
+- Pure. The input graph is never mutated. Unchanged nodes and edges are shared with the result. Cost is O(nodes + edges + ops), plus O(degree) per `removeNode` (an incident-edge index is built on the first removal in a batch).
 - Atomic. Every op applies, or none do and the original graph is returned.
 - Ops are parsed with strict schemas. Unknown keys are rejected, not dropped, so `canon`, `version`, `createdBy` and `worldId` cannot be smuggled in.
 - Identity and time come from `actor`, which the server builds from the authenticated session. `createdBy` on new entities and every `updatedAt` use it.
 - Max 500 ops per batch; max 5000 moves per `moveNodes`.
+- A batch may change each node or edge at most once. A second change to the same id in one batch (including remove then re-add, or the same node twice in one `moveNodes`) fails with `INVALID_OP`; clients merge their changes into one op.
 
 ### 4.1 Ops
 
 | Op | Fields | Effect |
 | --- | --- | --- |
-| `addNode` | `node: {id, kind, title, position, summary?, body?, tags?, canon?, media?, size?, regionId?, layer?, meta?}` | new node at version 1 |
-| `updateNode` | `id, baseVersion, patch: {kind?, title?, summary?, body?, tags?, media?, size? (null clears), regionId?, layer?, meta?}` | merge patch, version +1 |
-| `moveNodes` | `moves: [{id, baseVersion, position, regionId?}]` | move each node, version +1 each |
+| `addNode` | `node: {id, kind, title, position, summary?, body?, tags?, canon?, media?, size?, regionId?, layer?, meta?}` | new node at the next counter value |
+| `updateNode` | `id, baseVersion, patch: {kind?, title?, summary?, body?, tags?, media?, size? (null clears), regionId?, layer?, meta?}` | merge patch, next counter value |
+| `moveNodes` | `moves: [{id, baseVersion, position, regionId?}]` | move each node, each takes the next counter value |
 | `removeNode` | `id, baseVersion` | remove node and its edges |
-| `addEdge` | `edge: {from, to, relation, id?, label?, canon?, meta?}` | new edge at version 1 |
+| `addEdge` | `edge: {from, to, relation, id?, label?, canon?, meta?}` | new edge at the next counter value |
 | `removeEdge` | `id, baseVersion` | remove edge |
-| `proposeCanon` | `target: {type: "node" or "edge", id}, baseVersion, ref?, note?` | status to `proposed`, version +1 |
+| `proposeCanon` | `target: {type: "node" or "edge", id}, baseVersion, ref?, note?` | status to `proposed`, next counter value |
 
-`baseVersion` is the version the client last saw. If it differs from the current version the batch fails with `STALE_VERSION`, including `expectedVersion` and `actualVersion`. The client re-reads and retries. Within a batch, versions chain: a second update to the same node uses the version produced by the first.
+`baseVersion` is the version the client last saw. If it differs from the current version the batch fails with `STALE_VERSION`, including `expectedVersion` and `actualVersion`. The client re-reads and retries.
+
+Versions come from one world-wide counter. The batch starts from the counter floor (`currentVersionFloor(graph)`: `world.version`, or a higher entity version in graphs written by older tools). Each accepted change, including a remove, takes the next value; a created or changed entity stores it as its `version`, and the result's `world.version` is the counter after the batch. Versions therefore only grow and are never reused: when an id is removed and created again, the new entity's version is higher than any version a stale op could carry, so the stale op fails with `STALE_VERSION` instead of acting on the replacement.
 
 Ids for `addNode` are required. When an MCP caller omits one, L2 fills it with `newId('n', title)` before calling `applyOps`.
 
@@ -174,7 +177,7 @@ Success:
 { ok: true, graph, applied, changed: { nodes, edges, removedNodes, removedEdges }, proposals: CanonProposal[] }
 ```
 
-`proposals` reflects the final state of the batch: at most one entry per target, at the target's final version, and only for targets that still exist with `canon.status: "proposed"`. A proposal followed in the same batch by an edit (which resets the target to draft) or a remove is dropped. A patch key set to `undefined` counts as not changed.
+`proposals` reflects the final state of the batch: at most one entry per target, at the target's final version, and only for targets that still exist with `canon.status: "proposed"`. Since a batch changes each target at most once, a proposal cannot be followed by an edit or remove of the same target in that batch. A later batch that edits a proposed node resets it to draft and returns no proposal. A patch key set to `undefined` counts as not changed.
 
 Failure:
 
@@ -204,7 +207,7 @@ The browser never loads a whole large world.
 
 1. World space is cut into square tiles of `TILE_SIZE = 2048` world units. `tileKey({x, y})` is `"<floor(x/2048)>:<floor(y/2048)>"`. A node belongs to the tile containing its `position`.
 2. L2 keeps a D1 index row per node: `(world_id, node_id, tile_key, region_id, kind, title, canon_status, version, x, y, w, h)` with an index on `(world_id, tile_key)`. The full node JSON lives in the world's Durable Object storage.
-3. On viewport change the client computes `tileKeysForBounds(viewport padded by one tile)` and asks only for tiles it does not hold. At `cluster` level it asks for per-tile counts by kind instead of nodes.
+3. On viewport change the client computes `tileKeysForBounds(viewport padded by one tile)` and asks only for tiles it does not hold. `tileKeysForBounds` throws `RangeError` above `MAX_TILES_PER_QUERY` (4096) tiles or when a tile index is not a safe integer, so a huge rectangle cannot loop or allocate without bound. At `cluster` level the client asks for per-tile counts by kind (or uses a coarser tile size) instead of nodes.
 4. Edges are returned with a tile when either endpoint is in the tile. The client keeps an LRU of tiles and drops tiles far outside the viewport.
 5. Region outlines (`world.regions`, at most 4096) and the minimap always load in full; they are small.
 6. Search (D1 full text plus Vectorize) returns node ids with positions so the client can jump and then load the tiles there.
@@ -230,6 +233,9 @@ It reads layout, not names:
 - A small text under an image is its caption; text inside an image box is the image summary. Images become `image` nodes with `media[].originalSrc` and `needsReupload: true`. A `src` over 100,000 characters (the `originalSrc` cap) keeps the node without media, records `meta.oversizedSrc` (length, hash, prefix) and `meta.needsReupload: true`, and adds a report warning. A free text longer than the summary limit keeps its full text in `body` even without a newline. An image right above or left of a heading gets `image references entity` (label `depicts`).
 - Arrows become `precedes` edges. A node whose text names another entity title gets `references` (label `mentions`).
 - Everything imported is `canon.status: "draft"`, `createdBy.harness: "importer"`. Output is deterministic.
+- Text is never dropped silently. When a merged caption, summary or heading text is longer than the title or summary limit, the full text goes to `body`; if it still cannot be kept, the report gets a warning. Oversized images count toward `needsReupload` in the report.
+- Input checks: duplicate element ids in array input are rejected. The timestamp (`options.at`, else `exportedAt`) must be `YYYY-MM-DD` or an ISO datetime with `Z` or an offset; it is stored in UTC. A timestamp without a zone is rejected because it would depend on the host time zone.
+- The CLI refuses to write `--out` or `--report` onto `--in` or `--lexicon`, and refuses `--out` equal to `--report`.
 
 The report lists elements in by type, nodes and edges out by kind and relation, regions out, per-element dispositions (`node`, `merged`, `expanded`, `edge`, `region`, `skipped`) that always sum to the element count, images needing re-upload, and warnings.
 

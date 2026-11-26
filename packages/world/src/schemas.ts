@@ -82,7 +82,7 @@ export type CanonStatus = z.infer<typeof canonStatusSchema>;
  */
 export const canonSchema = z.object({
   status: canonStatusSchema,
-  ref: z.url().optional(),
+  ref: z.url({ protocol: /^https?$/ }).optional(),
 }).refine((value) => value.status !== 'canon' || Boolean(value.ref), {
   message: 'canon.status "canon" requires canon.ref (link to the merged canon source).',
   path: ['ref'],
@@ -143,8 +143,8 @@ export const mediaSchema = z.object({
   url: z.url({ protocol: /^https?$/ }).optional(),
   alt: z.string().max(LIMITS.titleMax).default(''),
   role: mediaRoleSchema,
-  /** Where the media links to when clicked (source document, Figma frame). */
-  href: z.url().optional(),
+  /** Where the media links to when clicked (source document, Figma frame). http(s) only. */
+  href: z.url({ protocol: /^https?$/ }).optional(),
   originalSrc: z.string().min(1).max(100_000).optional(),
   needsReupload: z.boolean().optional(),
   width: z.number().finite().positive().optional(),
@@ -176,7 +176,7 @@ export const worldNodeSchema = z.object({
   layer: z.number().int().min(-1000).max(1000).default(0),
   createdBy: actorSchema,
   updatedAt: z.iso.datetime(),
-  /** Starts at 1, +1 on every accepted change to this node. */
+  /** Value of the world version counter at this node's last change. Never reused. */
   version: z.number().int().positive(),
   /** Free-form provenance and extension data. Not rendered as content. */
   meta: z.record(z.string(), z.unknown()).default({}),
@@ -210,7 +210,7 @@ export const worldSchema = z.object({
   id: worldIdSchema,
   title: z.string().min(1).max(LIMITS.titleMax),
   summary: z.string().max(LIMITS.summaryMax).default(''),
-  /** Graph revision. +1 on every accepted op batch. */
+  /** World-wide version counter: the highest version issued to any change. */
   version: z.number().int().nonnegative(),
   regions: z.array(regionSchema).max(LIMITS.regionsMax).default([]),
   updatedAt: z.iso.datetime(),

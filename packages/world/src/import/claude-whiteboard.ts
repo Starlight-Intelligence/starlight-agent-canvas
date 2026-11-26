@@ -230,11 +230,10 @@ function normalizeAt(options: ImportOptions, exportedAt: string | undefined): st
   const candidate = options.at ?? exportedAt;
   if (!candidate) throw new Error('importClaudeWhiteboard: pass options.at; the export has no exportedAt.');
   if (/^\d{4}-\d{2}-\d{2}$/.test(candidate)) return `${candidate}T00:00:00.000Z`;
-  const parsed = z.iso.datetime().safeParse(candidate);
-  if (parsed.success) return candidate;
-  const date = new Date(candidate);
-  if (Number.isNaN(date.getTime())) throw new Error(`importClaudeWhiteboard: cannot read timestamp "${candidate}".`);
-  return date.toISOString();
+  // Only absolute timestamps (Z or an explicit offset). A timestamp without a
+  // zone would depend on the host time zone and break deterministic output.
+  if (z.iso.datetime({ offset: true }).safeParse(candidate).success) return new Date(candidate).toISOString();
+  throw new Error(`importClaudeWhiteboard: timestamp "${candidate}" must be YYYY-MM-DD or an ISO datetime with Z or an offset.`);
 }
 
 function escapeRegExp(value: string): string {
@@ -265,6 +264,13 @@ export function importClaudeWhiteboard(input: unknown, options: ImportOptions = 
     lexTags.set(title.trim().toLowerCase(), tags);
   }
 
+  if (Array.isArray(doc.elements)) {
+    const seen = new Set<string>();
+    for (const el of doc.elements) {
+      if (seen.has(el.id)) throw new Error(`importClaudeWhiteboard: duplicate element id "${el.id}" in the export.`);
+      seen.add(el.id);
+    }
+  }
   const elements: El[] = (Array.isArray(doc.elements)
     ? doc.elements.map(({ id, ...rest }) => ({ ...rest, key: id }))
     : Object.entries(doc.elements).map(([key, value]) => ({ ...value, key }))
@@ -379,13 +385,26 @@ export function importClaudeWhiteboard(input: unknown, options: ImportOptions = 
   }): WorldNode => {
     const lower = spec.title.trim().toLowerCase();
     const tags = [...new Set([...(spec.tags ?? []), ...(lexTags.get(lower) ?? [])])];
+    // Never drop source text silently. If the title or summary would be
+    // clipped, keep the full text in body (when body is free), else warn.
+    const summaryText = (spec.summary ?? '').trim();
+    const titleText = spec.title.trim();
+    let body = spec.body ?? '';
+    const summaryOverflow = summaryText.length > LIMITS.summaryMax;
+    const titleOverflow = titleText.length > LIMITS.titleMax;
+    if (!body && summaryOverflow) body = summaryText;
+    else if (!body && titleOverflow) body = titleText;
+    if ((summaryOverflow && body !== summaryText && !body.includes(summaryText))
+      || (titleOverflow && body !== titleText && !body.includes(titleText) && !summaryText.includes(titleText))) {
+      warnings.push(`Node from ${spec.elementIds.join(', ') || spec.key} had text clipped to schema limits.`);
+    }
     const node: WorldNode = {
       id: stableId('n', `${worldId}\u0000claude-whiteboard\u0000${spec.key}`, spec.title),
       worldId,
       kind: spec.kind,
-      title: clip(spec.title, 300),
-      summary: clip(spec.summary ?? '', 2000),
-      body: spec.body ?? '',
+      title: clip(spec.title, LIMITS.titleMax),
+      summary: clip(spec.summary ?? '', LIMITS.summaryMax),
+      body: clip(body, LIMITS.bodyMax),
       tags,
       canon: { status: 'draft' },
       media: spec.media ?? [],
@@ -778,6 +797,7 @@ export function importClaudeWhiteboard(input: unknown, options: ImportOptions = 
       // record a fingerprint so the asset can be re-uploaded from the export.
       oversizedSrc = { length: img.src.length, hash53: hash53(img.src).toString(36), prefix: img.src.slice(0, 64) };
       warnings.push(`Image ${img.key} has a src of ${img.src.length} characters (limit ${ORIGINAL_SRC_MAX}); kept the node without media. Re-upload it from the export.`);
+      reupload++;
     } else if (img.src) {
       media.push({
         alt: clip(title, 300),

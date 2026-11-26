@@ -45,9 +45,30 @@ async function main(): Promise<void> {
     return;
   }
 
-  const input = JSON.parse(await readFile(resolve(values.in), 'utf8')) as unknown;
-  const lexicon = values.lexicon
-    ? (JSON.parse(await readFile(resolve(values.lexicon), 'utf8')) as ImportLexicon)
+  // Refuse overlapping paths: never overwrite the source export or lexicon,
+  // and never let the report replace the graph.
+  const inPath = resolve(values.in);
+  const outPath = values.out ? resolve(values.out) : undefined;
+  const reportPath = values.report ? resolve(values.report) : undefined;
+  const lexiconPath = values.lexicon ? resolve(values.lexicon) : undefined;
+  const inputs = [inPath, lexiconPath].filter((path): path is string => Boolean(path));
+  const outputs = [outPath, reportPath].filter((path): path is string => Boolean(path));
+  for (const output of outputs) {
+    if (inputs.includes(output)) {
+      process.stderr.write(`error: output path ${output} is also an input; refusing to overwrite it.\n`);
+      process.exitCode = 2;
+      return;
+    }
+  }
+  if (outPath && reportPath && outPath === reportPath) {
+    process.stderr.write('error: --out and --report must be different files.\n');
+    process.exitCode = 2;
+    return;
+  }
+
+  const input = JSON.parse(await readFile(inPath, 'utf8')) as unknown;
+  const lexicon = lexiconPath
+    ? (JSON.parse(await readFile(lexiconPath, 'utf8')) as ImportLexicon)
     : undefined;
 
   const { graph, report } = importClaudeWhiteboard(input, {
@@ -58,11 +79,11 @@ async function main(): Promise<void> {
   });
 
   const json = `${JSON.stringify(graph, null, 2)}\n`;
-  if (values.out) await writeAtomic(resolve(values.out), json);
+  if (outPath) await writeAtomic(outPath, json);
   else process.stdout.write(json);
 
   const reportJson = `${JSON.stringify(report, null, 2)}\n`;
-  if (values.report) await writeAtomic(resolve(values.report), reportJson);
+  if (reportPath) await writeAtomic(reportPath, reportJson);
   process.stderr.write(reportJson);
 }
 
