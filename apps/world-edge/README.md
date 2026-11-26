@@ -186,7 +186,7 @@ pnpm world-edge:test          # builds packages/world, then runs the Workers tes
 pnpm world-edge:dry-run       # bundles with wrangler, no upload
 ```
 
-To run the Worker locally, create `apps/world-edge/.dev.vars` (listed in `apps/world-edge/.gitignore`; never commit it) with a local token hash:
+To run the Worker locally, create `apps/world-edge/.dev.vars` (listed in `apps/world-edge/.gitignore`; never commit it) with a local token hash (on macOS, replace `sha256sum` with `shasum -a 256` here and below):
 
 ```bash
 TOKEN=$(openssl rand -hex 24)
