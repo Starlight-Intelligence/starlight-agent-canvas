@@ -21,10 +21,13 @@ async function keypair() {
     ['sign', 'verify'],
   )) as CryptoKeyPair;
   const jwk = (await crypto.subtle.exportKey('jwk', pair.publicKey)) as JsonWebKey;
-  return { pair, jwk: { ...jwk, kid: 'k1' } };
+  // A fresh kid per key pair, so a JWKS cached by an earlier test can never
+  // satisfy (or explain) a later assertion.
+  const kid = `k-${crypto.randomUUID()}`;
+  return { pair, kid, jwk: { ...jwk, kid } };
 }
 
-async function sign(privateKey: CryptoKey, payload: Record<string, unknown>, kid = 'k1') {
+async function sign(privateKey: CryptoKey, payload: Record<string, unknown>, kid: string) {
   const head = b64url(JSON.stringify({ alg: 'RS256', kid, typ: 'JWT' }));
   const body = b64url(JSON.stringify(payload));
   const sig = await crypto.subtle.sign('RSASSA-PKCS1-v1_5', privateKey, new TextEncoder().encode(`${head}.${body}`));
@@ -36,23 +39,23 @@ describe('Access JWT verification', () => {
   const accessEnv = { ACCESS_TEAM_DOMAIN: TEAM, ACCESS_AUD: AUD };
 
   it('accepts a valid assertion and maps it to a human principal', async () => {
-    const { pair, jwk } = await keypair();
+    const { pair, kid, jwk } = await keypair();
     const fetcher: JwksFetcher = async () => ({ keys: [jwk] });
     const now = Math.floor(Date.now() / 1000);
-    const token = await sign(pair.privateKey, { iss: TEAM, aud: [AUD], email: 'frank@example.com', exp: now + 600, iat: now });
+    const token = await sign(pair.privateKey, { iss: TEAM, aud: [AUD], email: 'frank@example.com', exp: now + 600, iat: now }, kid);
     await expect(verifyAccessJwt(token, accessEnv, { fetcher })).resolves.toEqual({ harness: 'human', actor: 'frank@example.com', via: 'access' });
   });
 
   it('rejects wrong audience, wrong issuer, expiry, unknown key and tampering', async () => {
-    const { pair, jwk } = await keypair();
+    const { pair, kid, jwk } = await keypair();
     const fetcher: JwksFetcher = async () => ({ keys: [jwk] });
     const now = Math.floor(Date.now() / 1000);
     const good = { iss: TEAM, aud: [AUD], email: 'frank@example.com', exp: now + 600 };
-    await expect(verifyAccessJwt(await sign(pair.privateKey, { ...good, aud: ['other'] }), accessEnv, { fetcher })).rejects.toThrow(/audience/);
-    await expect(verifyAccessJwt(await sign(pair.privateKey, { ...good, iss: 'https://evil.cloudflareaccess.com' }), accessEnv, { fetcher })).rejects.toThrow(/issuer/);
-    await expect(verifyAccessJwt(await sign(pair.privateKey, { ...good, exp: now - 3600 }), accessEnv, { fetcher })).rejects.toThrow(/expired/);
-    await expect(verifyAccessJwt(await sign(pair.privateKey, good, 'k2'), accessEnv, { fetcher })).rejects.toThrow(/unknown key/);
-    const token = await sign(pair.privateKey, good);
+    await expect(verifyAccessJwt(await sign(pair.privateKey, { ...good, aud: ['other'] }, kid), accessEnv, { fetcher })).rejects.toThrow(/audience/);
+    await expect(verifyAccessJwt(await sign(pair.privateKey, { ...good, iss: 'https://evil.cloudflareaccess.com' }, kid), accessEnv, { fetcher })).rejects.toThrow(/issuer/);
+    await expect(verifyAccessJwt(await sign(pair.privateKey, { ...good, exp: now - 3600 }, kid), accessEnv, { fetcher })).rejects.toThrow(/expired/);
+    await expect(verifyAccessJwt(await sign(pair.privateKey, good, `${kid}-unknown`), accessEnv, { fetcher })).rejects.toThrow(/unknown key/);
+    const token = await sign(pair.privateKey, good, kid);
     const [h, , s] = token.split('.');
     const forged = `${h}.${b64url(JSON.stringify({ ...good, email: 'mallory@example.com' }))}.${s}`;
     await expect(verifyAccessJwt(forged, accessEnv, { fetcher })).rejects.toThrow(/signature/);
@@ -172,16 +175,16 @@ function serveAccessCerts(keys: JsonWebKey[] | null) {
 }
 
 async function accessTokens() {
-  const { pair, jwk } = await keypair();
+  const { pair, kid, jwk } = await keypair();
   const now = Math.floor(Date.now() / 1000);
   const base = { iss: TEAM, aud: [AUD], exp: now + 600, iat: now, type: 'app' };
   return {
     jwk,
     /** What Access issues for CF-Access-Client-Id/Secret: common_name, empty sub, no email. */
-    serviceJwt: await sign(pair.privateKey, { ...base, common_name: 'abc123.access', sub: '' }),
+    serviceJwt: await sign(pair.privateKey, { ...base, common_name: 'abc123.access', sub: '' }, kid),
     /** A browser identity behind Access. */
-    identityJwt: await sign(pair.privateKey, { ...base, email: 'frank@example.com', sub: 'user-1' }),
-    sign: (payload: Record<string, unknown>) => sign(pair.privateKey, { ...base, ...payload }),
+    identityJwt: await sign(pair.privateKey, { ...base, email: 'frank@example.com', sub: 'user-1' }, kid),
+    sign: (payload: Record<string, unknown>) => sign(pair.privateKey, { ...base, ...payload }, kid),
   };
 }
 
@@ -222,6 +225,9 @@ describe('Access JWT principal mapping', () => {
       { email: '', sub: 'user-1' },
       { email: 42, sub: 'user-1' },
       { email: 'frank@example.com', common_name: 'abc123.access' },
+      { email: 'frank@example.com', common_name: null },
+      { email: 'frank@example.com', common_name: 42 },
+      { email: '  ' },
     ]) {
       await expect(verifyAccessJwt(await t.sign(payload), accessEnv, { fetcher })).rejects.toThrow(/service-token/);
     }

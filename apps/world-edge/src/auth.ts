@@ -168,8 +168,9 @@ export async function verifyAccessJwt(
   // Only a browser identity (email) is a human. Access also signs a JWT for
   // requests that carry an Access service token (CF-Access-Client-Id/Secret);
   // that JWT has common_name and no email. It names no person and no harness,
-  // so it never becomes a principal.
-  if (typeof payload.common_name === 'string' || typeof payload.email !== 'string' || payload.email.length === 0) {
+  // so it never becomes a principal. Any common_name claim at all (even null or
+  // a number) disqualifies the token, and email must have visible content.
+  if (payload.common_name !== undefined || typeof payload.email !== 'string' || payload.email.trim().length === 0) {
     throw new AuthError('Access service-token assertions are not accepted; use a bearer token.');
   }
   return { harness: 'human', actor: payload.email, via: 'access' };
