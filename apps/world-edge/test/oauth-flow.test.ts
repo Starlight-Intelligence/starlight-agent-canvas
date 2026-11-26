@@ -130,7 +130,8 @@ describe('OAuth discovery', () => {
       const challenge = result.headers.get('www-authenticate') ?? '';
       expect(challenge.startsWith(`Bearer realm="OAuth", resource_metadata="${PRM_URL}"`)).toBe(true);
       expect(challenge).toContain(`resource_metadata="${PRM_URL}"`);
-      expect(challenge).toContain('scope="world:read world:write"');
+      // A client that follows only the challenge must be able to ask for propose too.
+      expect(challenge).toContain('scope="world:read world:write world:propose"');
       expect(JSON.parse(result.text)).toMatchObject({ error: { code: 'UNAUTHENTICATED' } });
     }
   });

@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { unauthorized, verifyServiceToken, WORLD_SCOPES, type Principal } from './auth.js';
 import type { Env } from './env.js';
 import { handleMcp, MCP_ROUTE } from './mcp.js';
+import { challengeWithAllScopes } from './oauth-challenge.js';
 import { handleAuthorize, handleCallback } from './oauth-authorize.js';
 import { isRedirectAllowed, parseRedirectAllowlist, type RedirectAllowEntry } from './redirect-allowlist.js';
 import { notFound, routeAuthenticated } from './router.js';
@@ -228,7 +229,8 @@ const UNAUTHENTICATED_BODY = JSON.stringify({ error: { code: 'UNAUTHENTICATED', 
  *      from requiredScopes, which must stay read and write so the 401
  *      challenge names only the baseline. Every other field is untouched.
  *   3. A 401 on /mcp keeps the provider's status and WWW-Authenticate header
- *      (resource_metadata, scope, error) but carries this Worker's JSON body,
+ *      (resource_metadata, error), with `scope` widened to all three scopes so a
+ *      client that follows only the challenge can request world:propose; it carries this Worker's JSON body,
  *      `{error: {code: "UNAUTHENTICATED", message}}`, which the world-agents
  *      client and existing tests rely on.
  */
@@ -247,6 +249,8 @@ export async function fetchWithOAuth(provider: OAuthProvider<Env>, request: Requ
     const headers = new Headers(response.headers);
     headers.set('content-type', 'application/json');
     headers.delete('content-length');
+    const challenge = headers.get('www-authenticate');
+    if (challenge) headers.set('www-authenticate', challengeWithAllScopes(challenge));
     return new Response(UNAUTHENTICATED_BODY, { status: 401, headers });
   }
   return response;
