@@ -1,6 +1,6 @@
 'use client';
 
-import { forwardRef, useEffect, useMemo, useState } from 'react';
+import { forwardRef, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowRight, Link2, X } from 'lucide-react';
 import { NODE_KINDS, RELATIONS } from '@starlight-agent-canvas/world';
 import type { NodeKind, Relation, WorldEdge, WorldNode } from '@starlight-agent-canvas/world';
@@ -51,14 +51,22 @@ export const Inspector = forwardRef<HTMLInputElement, InspectorProps>(function I
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
 
+  // Last node content copied into the form. A new version (a move, or an edit
+  // elsewhere) only replaces fields the user has not changed, so a drag before
+  // saving does not discard a draft. Selecting another node resets everything.
+  const synced = useRef<WorldNode | null>(null);
   useEffect(() => {
     if (!node) return;
-    setTitle(node.title);
-    setKind(node.kind);
-    setSummary(node.summary);
-    setBody(node.body);
-    setTags(node.tags.join(', '));
-    setNote('');
+    const prev = synced.current;
+    const fresh = !prev || prev.id !== node.id;
+    const keep = (local: string, before: string | undefined) => !fresh && before !== undefined && local !== before;
+    if (!keep(title, prev?.title)) setTitle(node.title);
+    if (!keep(kind, prev?.kind)) setKind(node.kind);
+    if (!keep(summary, prev?.summary)) setSummary(node.summary);
+    if (!keep(body, prev?.body)) setBody(node.body);
+    if (!keep(tags, prev?.tags.join(', '))) setTags(node.tags.join(', '));
+    if (fresh) setNote('');
+    synced.current = node;
   }, [node?.id, node?.version]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const patch = useMemo(() => {

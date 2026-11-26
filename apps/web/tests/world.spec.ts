@@ -126,4 +126,33 @@ test.describe('world canvas', () => {
     const world = await (await request.get('/api/worlds/demo')).json();
     expect(world.nodes.find((n: { id: string }) => n.id === 'n_gen_7').title).not.toBe('Forged');
   });
+
+  test('the add node shortcut only works in graph view', async ({ request, page }) => {
+    const before = (await (await request.get('/api/worlds/demo')).json()).nodes.length;
+    await page.goto('/world/demo');
+    await ready(page);
+    await page.getByRole('radio', { name: 'Timeline' }).click();
+    await expect(page.locator('.wc')).toHaveAttribute('data-view', 'timeline');
+    await page.locator('.wc-stage .react-flow__pane').click({ position: { x: 10, y: 10 } });
+    await page.keyboard.press('n');
+    await page.waitForTimeout(500);
+    const after = (await (await request.get('/api/worlds/demo')).json()).nodes.length;
+    expect(after).toBe(before);
+  });
+
+  test('dragging a node keeps unsaved inspector edits', async ({ page }, info) => {
+    test.skip(info.project.name === 'mobile', 'drag is a desktop pointer interaction');
+    await page.goto('/world/demo?node=n_gen_6&zoom=1');
+    await ready(page);
+    const inspector = page.getByRole('complementary', { name: 'Inspector' });
+    await inspector.getByLabel('Summary').fill('Draft that must survive a move');
+    const box = await page.locator('.react-flow__node[data-id="n_gen_6"]').boundingBox();
+    expect(box).not.toBeNull();
+    await page.mouse.move(box!.x + 40, box!.y + 20);
+    await page.mouse.down();
+    await page.mouse.move(box!.x + 120, box!.y + 60, { steps: 8 });
+    await page.mouse.up();
+    await expect(inspector.getByText('v2', { exact: true })).toBeVisible();
+    await expect(inspector.getByLabel('Summary')).toHaveValue('Draft that must survive a move');
+  });
 });

@@ -574,7 +574,9 @@ function WorldCanvasInner({ worldId, stressNodes }: { worldId: string; stressNod
   }, []);
 
   const addNode = useCallback(async () => {
-    if (!source || !vp || !summary) return;
+    // Timeline and Map positions are generated, not authored; adding there would
+    // place the node at an unrelated graph position. Same rule as the toolbar.
+    if (!source || !vp || !summary || view !== 'graph') return;
     const position = { x: Math.round(vp.x + vp.w / 2 - DEFAULT_W / 2), y: Math.round(vp.y + vp.h / 2 - DEFAULT_H / 2) };
     const id = newId('n', 'untitled');
     const region = regionAt(summary.world.regions, position);
@@ -584,7 +586,7 @@ function WorldCanvasInner({ worldId, stressNodes }: { worldId: string; stressNod
       if (rf.getZoom() < 0.4) await rf.setCenter(position.x + DEFAULT_W / 2, position.y + DEFAULT_H / 2, { zoom: 0.8, duration });
       requestAnimationFrame(() => inspectorTitleRef.current?.select());
     }
-  }, [source, vp, summary, runOps, rf, duration]);
+  }, [source, vp, summary, runOps, rf, duration, view]);
 
   const onSave = useCallback(async (node: WorldNode, patch: Record<string, unknown>) => {
     const out = await runOps([{ op: 'updateNode', id: node.id, baseVersion: node.version, patch }]);

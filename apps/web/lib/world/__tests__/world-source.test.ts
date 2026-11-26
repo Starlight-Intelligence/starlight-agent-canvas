@@ -245,3 +245,41 @@ describe('review fixes', () => {
     expect((await source.getNode(hit.id))?.id).toBe(target.id);
   });
 });
+
+describe('remote live feed', () => {
+  it('evicts changed and removed nodes before forwarding a live change', async () => {
+    const { RemoteWorldSource } = await import('../remote-source');
+    const g = graphOf(10);
+    const [a, b] = g.nodes;
+    let socket: { listeners: Record<string, (e: { data: string }) => void> } | null = null;
+    class FakeSocket {
+      listeners: Record<string, (e: { data: string }) => void> = {};
+      constructor() {
+        socket = this;
+      }
+      addEventListener(type: string, fn: (e: { data: string }) => void) {
+        this.listeners[type] = fn;
+      }
+    }
+    const original = (globalThis as { WebSocket?: unknown }).WebSocket;
+    (globalThis as { WebSocket?: unknown }).WebSocket = FakeSocket;
+    try {
+      let calls = 0;
+      const fetchImpl = vi.fn(async (url: string) => {
+        if (url.endsWith('/get_world')) return new Response(JSON.stringify({ world: g.world, counts: { nodes: 2, edges: 0, byKind: {} }, bounds: { x: 0, y: 0, w: 1, h: 1 } }));
+        calls += 1;
+        // First region read caches both nodes; later reads return only the updated one.
+        return new Response(JSON.stringify({ nodes: calls === 1 ? [a, b] : [{ ...a, title: 'Updated elsewhere', version: 2 }], edges: [] }));
+      });
+      const source = new RemoteWorldSource('https://worker.example', 'demo', fetchImpl as unknown as typeof fetch);
+      await source.loadWorld();
+      await source.getRegion({ bounds: { x: 0, y: 0, w: 10, h: 10 } });
+      expect((await source.getNode(a.id))?.version).toBe(1);
+      socket!.listeners.message({ data: JSON.stringify({ type: 'changed', version: 2, nodeIds: [a.id], edgeIds: [], removedNodeIds: [b.id], removedEdgeIds: [] }) });
+      expect((await source.getNode(a.id))?.title).toBe('Updated elsewhere');
+      expect(await source.getNode(b.id)).toBeNull();
+    } finally {
+      (globalThis as { WebSocket?: unknown }).WebSocket = original;
+    }
+  });
+});

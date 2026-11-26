@@ -181,7 +181,12 @@ export class RemoteWorldSource implements WorldSource {
         try {
           const data = JSON.parse(String(msg.data)) as WorldEvent;
           if (data.type === 'activity') this.push(data.entry);
-          else this.emit(data);
+          else {
+            // Another client changed the world: drop stale cached copies first
+            // so getNode() refetches instead of returning old versions.
+            if (data.type === 'changed') for (const id of [...data.nodeIds, ...data.removedNodeIds]) this.nodes.delete(id);
+            this.emit(data);
+          }
         } catch {
           // Ignore frames we do not understand.
         }
