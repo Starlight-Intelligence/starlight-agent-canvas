@@ -7,37 +7,42 @@ import { claude, sampleGraph } from './helpers.js';
 const ctx = { actor: claude };
 
 describe('applyOps: proposals match the final batch state (#64 review)', () => {
-  it('drops a proposal when a later op in the batch edits the target', () => {
-    const result = applyOps(sampleGraph(), [
-      { op: 'proposeCanon', target: { type: 'node', id: 'n_a' }, baseVersion: 1 },
-      { op: 'updateNode', id: 'n_a', baseVersion: 2, patch: { summary: 'changed after proposing' } },
-    ], ctx);
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.graph.nodes.find((n) => n.id === 'n_a')!.canon.status).toBe('draft');
-    expect(result.proposals).toEqual([]);
+  it('refuses to propose and then edit or remove the same node in one batch', () => {
+    for (const second of [
+      { op: 'updateNode', id: 'n_a', baseVersion: 1, patch: { summary: 'changed after proposing' } },
+      { op: 'removeNode', id: 'n_a', baseVersion: 1 },
+      { op: 'proposeCanon', target: { type: 'node', id: 'n_a' }, baseVersion: 1, note: 'second' },
+    ]) {
+      const result = applyOps(sampleGraph(), [
+        { op: 'proposeCanon', target: { type: 'node', id: 'n_a' }, baseVersion: 1 },
+        second,
+      ], ctx);
+      expect(result.ok ? 'ok' : result.error.code).toBe('INVALID_OP');
+    }
   });
 
-  it('drops a proposal when a later op in the batch removes the target', () => {
-    const result = applyOps(sampleGraph(), [
-      { op: 'proposeCanon', target: { type: 'node', id: 'n_a' }, baseVersion: 1 },
-      { op: 'removeNode', id: 'n_a', baseVersion: 2 },
-    ], ctx);
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.proposals).toEqual([]);
+  it('a later batch that edits a proposed node returns no proposal and resets it to draft', () => {
+    const first = applyOps(sampleGraph(), [{ op: 'proposeCanon', target: { type: 'node', id: 'n_a' }, baseVersion: 1 }], ctx);
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    const version = first.graph.nodes.find((n) => n.id === 'n_a')!.version;
+    expect(first.proposals).toEqual([expect.objectContaining({ id: 'n_a', version })]);
+    const second = applyOps(first.graph, [{ op: 'updateNode', id: 'n_a', baseVersion: version, patch: { summary: 'changed' } }], ctx);
+    expect(second.ok).toBe(true);
+    if (!second.ok) return;
+    expect(second.graph.nodes.find((n) => n.id === 'n_a')!.canon.status).toBe('draft');
+    expect(second.proposals).toEqual([]);
   });
 
-  it('keeps one proposal per target, at the final version', () => {
-    const result = applyOps(sampleGraph(), [
-      { op: 'proposeCanon', target: { type: 'node', id: 'n_a' }, baseVersion: 1, note: 'first' },
-      { op: 'proposeCanon', target: { type: 'node', id: 'n_a' }, baseVersion: 2, note: 'second' },
-      { op: 'moveNodes', moves: [{ id: 'n_a', baseVersion: 3, position: { x: 5, y: 5 } }] },
-    ], ctx);
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.proposals).toHaveLength(1);
-    expect(result.proposals[0]).toMatchObject({ id: 'n_a', note: 'second', version: 4 });
+  it('moving a proposed node keeps it proposed and reports no new proposal', () => {
+    const first = applyOps(sampleGraph(), [{ op: 'proposeCanon', target: { type: 'node', id: 'n_a' }, baseVersion: 1 }], ctx);
+    if (!first.ok) throw new Error('setup failed');
+    const version = first.graph.nodes.find((n) => n.id === 'n_a')!.version;
+    const moved = applyOps(first.graph, [{ op: 'moveNodes', moves: [{ id: 'n_a', baseVersion: version, position: { x: 5, y: 5 } }] }], ctx);
+    expect(moved.ok).toBe(true);
+    if (!moved.ok) return;
+    expect(moved.graph.nodes.find((n) => n.id === 'n_a')!.canon.status).toBe('proposed');
+    expect(moved.proposals).toEqual([]);
   });
 });
 

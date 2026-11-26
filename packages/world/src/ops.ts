@@ -23,6 +23,10 @@ import {
  *   client cannot smuggle `canon`, `version` or `createdBy` into an op.
  * - Ops that touch an existing node or edge carry `baseVersion`, the version
  *   the client last saw. A mismatch rejects the whole batch (STALE_VERSION).
+ * - Versions come from one world-wide counter: every accepted change takes the
+ *   next value, so versions only grow and are never reused, even when an id is
+ *   removed and created again. `world.version` is the counter's current value.
+ * - A batch may touch each node or edge at most once (INVALID_OP otherwise).
  * - A batch is atomic: all ops apply or none do.
  * - No op can set canon.status to 'canon'. The most an op can do is
  *   'proposed'. Canon is promoted only by syncing merged canon from git
@@ -34,7 +38,7 @@ import {
 /** canon in add ops: 'draft' or 'proposed' only. */
 const opCanonInputSchema = z.strictObject({
   status: z.enum(['draft', 'proposed']),
-  ref: z.url().optional(),
+  ref: z.url({ protocol: /^https?$/ }).optional(),
 });
 
 const tagsSchema = z.array(z.string().min(1).max(LIMITS.tagMax)).max(LIMITS.tagsMax);
@@ -129,7 +133,7 @@ export const proposeCanonOpSchema = z.strictObject({
   }),
   baseVersion: baseVersionSchema,
   /** Link to the canon PR once opened. Usually filled in by L2 after it opens the PR. */
-  ref: z.url().optional(),
+  ref: z.url({ protocol: /^https?$/ }).optional(),
   /** Why this should be canon. Goes into the PR body. */
   note: z.string().max(LIMITS.summaryMax).optional(),
 });
@@ -216,33 +220,36 @@ function checkVersion(kind: 'node' | 'edge', id: string, actual: number, expecte
   }
 }
 
-/**
- * The op name for an error message. Never throws: a malformed op may carry an
- * `op` that is an object without a usable toString, or no `op` at all.
- */
-function describeOpName(raw: unknown): string {
-  try {
-    if (raw === null || typeof raw !== 'object') return '?';
-    const name = (raw as Record<string, unknown>).op;
-    if (typeof name === 'string') return name.length > 40 ? `${name.slice(0, 40)}…` : name;
-    return name === undefined ? '?' : `<${typeof name}>`;
-  } catch {
-    return '?';
-  }
-}
-
 function toCanon(input: { status: 'draft' | 'proposed'; ref?: string } | undefined): Canon {
   if (!input) return { status: 'draft' };
   return input.ref ? { status: input.status, ref: input.ref } : { status: input.status };
 }
 
 /**
+ * Highest version issued so far in this graph: the floor for the next change.
+ * Normally `world.version`; the max over entities guards graphs written by
+ * older tools where an entity version ran ahead of the world counter.
+ */
+export function currentVersionFloor(graph: WorldGraph): number {
+  let max = graph.world.version;
+  for (const node of graph.nodes) if (node.version > max) max = node.version;
+  for (const edge of graph.edges) if (edge.version > max) max = edge.version;
+  return max;
+}
+
+/** Op name for error messages. Never calls user-controlled toString. */
+function opName(raw: unknown): string {
+  if (typeof raw !== 'object' || raw === null) return '?';
+  const value = (raw as { op?: unknown }).op;
+  return typeof value === 'string' ? value.slice(0, 40) : '?';
+}
+
+/**
  * Pure reducer. Returns a new graph; never mutates the input. Atomic: on any
  * error the original graph is returned with `ok: false`.
  *
- * Cost is O(nodes + edges + ops) per batch, including batches with many
- * removeNode ops (edges are indexed by endpoint once per batch): unchanged
- * node and edge objects are shared with the input, not copied.
+ * Cost is O(nodes + edges + ops) per batch, plus O(degree) per removeNode:
+ * unchanged node and edge objects are shared with the input, not copied.
  */
 export function applyOps(graph: WorldGraph, ops: readonly unknown[], context: ApplyContext): ApplyResult {
   const actorParse = actorSchema.safeParse(context?.actor);
@@ -251,8 +258,8 @@ export function applyOps(graph: WorldGraph, ops: readonly unknown[], context: Ap
   }
   const actor = actorParse.data;
 
-  // Ops usually arrive as parsed JSON from a client. Anything malformed must
-  // come back as INVALID_OP, never as a thrown error.
+  // Ops arrive as parsed client JSON. A body that is not an array must come
+  // back as INVALID_OP, not as a TypeError from reading `.length`.
   if (!Array.isArray(ops)) {
     return { ok: false, graph, error: { code: 'INVALID_OP', message: 'Ops must be an array.' } };
   }
@@ -262,25 +269,19 @@ export function applyOps(graph: WorldGraph, ops: readonly unknown[], context: Ap
 
   const parsedOps: GraphOp[] = [];
   for (let i = 0; i < ops.length; i++) {
-    let parsed: ReturnType<typeof graphOpSchema.safeParse>;
-    try {
-      parsed = graphOpSchema.safeParse(ops[i]);
-    } catch {
-      return { ok: false, graph, error: { code: 'INVALID_OP', message: `Op ${i} could not be read.`, opIndex: i } };
-    }
+    const parsed = graphOpSchema.safeParse(ops[i]);
     if (!parsed.success) {
       const issue = parsed.error.issues[0];
-      const opName = describeOpName(ops[i]);
-      const path = issue ? issue.path.map((part) => (typeof part === 'symbol' ? '?' : String(part))) : [];
-      const touchesCanon = path.includes('canon') || (issue?.code === 'unrecognized_keys' && Array.isArray((issue as { keys?: unknown }).keys) && (issue as { keys: unknown[] }).keys.includes('canon'));
+      const name = opName(ops[i]);
+      const touchesCanon = issue?.path.includes('canon') || (issue?.code === 'unrecognized_keys' && (issue as { keys?: string[] }).keys?.includes('canon'));
       return {
         ok: false,
         graph,
         error: {
           code: touchesCanon ? 'CANON_FORBIDDEN' : 'INVALID_OP',
           message: touchesCanon
-            ? `Op ${i} (${opName}) tries to set canon. Ops may only create drafts or use proposeCanon; canon is promoted from git.`
-            : `Op ${i} (${opName}) is invalid at ${path.join('.') || '(root)'}: ${typeof issue?.message === 'string' ? issue.message : 'unknown'}`,
+            ? `Op ${i} (${name}) tries to set canon. Ops may only create drafts or use proposeCanon; canon is promoted from git.`
+            : `Op ${i} (${name}) is invalid at ${issue?.path.join('.') || '(root)'}: ${issue?.message ?? 'unknown'}`,
           opIndex: i,
         },
       };
@@ -301,40 +302,40 @@ export function applyOps(graph: WorldGraph, ops: readonly unknown[], context: Ap
   const removedNodes = new Set<string>();
   const removedEdges = new Set<string>();
   const proposals: CanonProposal[] = [];
-  // Versions are never reused. A removed node or edge raises this floor to its
-  // last version, and every new node or edge starts above it, so a stale op
-  // that names a removed entity's old version can never match a replacement
-  // created under the same id.
-  let retiredVersion = graph.world.retiredVersion ?? 0;
-  const retire = (version: number): void => {
-    if (version > retiredVersion) retiredVersion = version;
+
+  let counter = currentVersionFloor(graph);
+  const bump = (): number => ++counter;
+  const touched = new Set<string>();
+  const touch = (kind: 'node' | 'edge', id: string, opIndex: number): void => {
+    const key = `${kind}:${id}`;
+    if (touched.has(key)) {
+      fail({ code: 'INVALID_OP', message: `${kind} ${id} is changed more than once in this batch. Merge the changes into one op.`, opIndex, id });
+    }
+    touched.add(key);
   };
-  // node id -> ids of edges touching it, so removing a node costs O(its edges)
-  // rather than O(all edges). Built on first use.
-  let edgesByNode: Map<string, Set<string>> | null = null;
-  const indexEdge = (index: Map<string, Set<string>>, edge: WorldEdge): void => {
+
+  // Incident-edge index, built on the first removeNode so batches without
+  // removals stay O(nodes + edges + ops).
+  let incident: Map<string, Set<string>> | null = null;
+  const linkIncident = (edge: WorldEdge): void => {
+    if (!incident) return;
     for (const end of [edge.from, edge.to]) {
-      let set = index.get(end);
-      if (!set) index.set(end, (set = new Set()));
+      let set = incident.get(end);
+      if (!set) incident.set(end, (set = new Set()));
       set.add(edge.id);
     }
   };
-  const edgeIndex = (): Map<string, Set<string>> => {
-    if (!edgesByNode) {
-      edgesByNode = new Map();
-      for (const edge of edges.values()) indexEdge(edgesByNode, edge);
-    }
-    return edgesByNode;
+  const unlinkIncident = (edge: WorldEdge): void => {
+    if (!incident) return;
+    incident.get(edge.from)?.delete(edge.id);
+    incident.get(edge.to)?.delete(edge.id);
   };
-  const dropEdge = (edge: WorldEdge): void => {
-    edges.delete(edge.id);
-    if (edgesByNode) {
-      edgesByNode.get(edge.from)?.delete(edge.id);
-      edgesByNode.get(edge.to)?.delete(edge.id);
+  const incidentEdges = (nodeId: string): WorldEdge[] => {
+    if (!incident) {
+      incident = new Map();
+      for (const edge of edges.values()) linkIncident(edge);
     }
-    changedEdges.delete(edge.id);
-    removedEdges.add(edge.id);
-    retire(edge.version);
+    return [...(incident.get(nodeId) ?? [])].map((id) => edges.get(id)!).filter(Boolean);
   };
 
   const requireRegion = (regionId: string | null | undefined, opIndex: number): void => {
@@ -360,6 +361,8 @@ export function applyOps(graph: WorldGraph, ops: readonly unknown[], context: Ap
           const input = op.node;
           if (nodes.has(input.id)) fail({ code: 'DUPLICATE_ID', message: `Node ${input.id} already exists.`, opIndex, id: input.id });
           requireRegion(input.regionId, opIndex);
+          touch('node', input.id, opIndex);
+          const version = bump();
           const node: WorldNode = {
             id: input.id,
             worldId,
@@ -376,19 +379,20 @@ export function applyOps(graph: WorldGraph, ops: readonly unknown[], context: Ap
             layer: input.layer ?? 0,
             createdBy: actor,
             updatedAt: actor.at,
-            version: retiredVersion + 1,
+            version,
             meta: input.meta ?? {},
           };
           nodes.set(node.id, node);
           removedNodes.delete(node.id);
           changedNodes.add(node.id);
           if (node.canon.status === 'proposed') {
-            proposals.push({ targetType: 'node', id: node.id, title: node.title, version: node.version, ref: node.canon.ref, proposedBy: actor });
+            proposals.push({ targetType: 'node', id: node.id, title: node.title, version, ref: node.canon.ref, proposedBy: actor });
           }
           break;
         }
         case 'updateNode': {
           const node = requireNode(op.id, opIndex);
+          touch('node', node.id, opIndex);
           checkVersion('node', node.id, node.version, op.baseVersion, opIndex);
           if (node.canon.status === 'canon') {
             fail({ code: 'CANON_LOCKED', message: `Node ${node.id} is canon. Change it through a canon PR, not an edit.`, opIndex, id: node.id });
@@ -398,7 +402,7 @@ export function applyOps(graph: WorldGraph, ops: readonly unknown[], context: Ap
           // spreading it would erase the field. Treat undefined as "not changed".
           const patch = Object.fromEntries(Object.entries(op.patch).filter(([, value]) => value !== undefined)) as typeof op.patch;
           const { size, ...rest } = patch;
-          const next: WorldNode = { ...node, ...rest, updatedAt: actor.at, version: node.version + 1 };
+          const next: WorldNode = { ...node, ...rest, updatedAt: actor.at, version: bump() };
           if (size === null) delete next.size;
           else if (size) next.size = size;
           // An edit after a proposal makes the proposal stale; drop back to draft.
@@ -408,11 +412,9 @@ export function applyOps(graph: WorldGraph, ops: readonly unknown[], context: Ap
           break;
         }
         case 'moveNodes': {
-          const seen = new Set<string>();
           for (const move of op.moves) {
-            if (seen.has(move.id)) fail({ code: 'INVALID_OP', message: `Node ${move.id} appears twice in one moveNodes op.`, opIndex, id: move.id });
-            seen.add(move.id);
             const node = requireNode(move.id, opIndex);
+            touch('node', node.id, opIndex);
             checkVersion('node', node.id, node.version, move.baseVersion, opIndex);
             requireRegion(move.regionId, opIndex);
             // Layout is not canon content, so canon nodes may move.
@@ -421,7 +423,7 @@ export function applyOps(graph: WorldGraph, ops: readonly unknown[], context: Ap
               position: move.position,
               ...(move.regionId !== undefined ? { regionId: move.regionId } : {}),
               updatedAt: actor.at,
-              version: node.version + 1,
+              version: bump(),
             };
             nodes.set(next.id, next);
             changedNodes.add(next.id);
@@ -430,22 +432,28 @@ export function applyOps(graph: WorldGraph, ops: readonly unknown[], context: Ap
         }
         case 'removeNode': {
           const node = requireNode(op.id, opIndex);
+          touch('node', node.id, opIndex);
           checkVersion('node', node.id, node.version, op.baseVersion, opIndex);
           if (node.canon.status === 'canon') {
             fail({ code: 'CANON_LOCKED', message: `Node ${node.id} is canon and cannot be removed from the canvas.`, opIndex, id: node.id });
           }
-          const touching = [...(edgeIndex().get(node.id) ?? [])].map((id) => edges.get(id)!).filter(Boolean);
-          for (const edge of touching) {
+          const attached = incidentEdges(node.id);
+          for (const edge of attached) {
             if (edge.canon.status === 'canon') {
               fail({ code: 'CANON_LOCKED', message: `Node ${node.id} has canon edge ${edge.id}; remove is refused.`, opIndex, id: edge.id });
             }
           }
-          for (const edge of touching) dropEdge(edge);
-          edgesByNode?.delete(node.id);
+          for (const edge of attached) {
+            unlinkIncident(edge);
+            edges.delete(edge.id);
+            changedEdges.delete(edge.id);
+            removedEdges.add(edge.id);
+            touched.add(`edge:${edge.id}`);
+          }
+          bump();
           nodes.delete(node.id);
           changedNodes.delete(node.id);
           removedNodes.add(node.id);
-          retire(node.version);
           break;
         }
         case 'addEdge': {
@@ -455,6 +463,8 @@ export function applyOps(graph: WorldGraph, ops: readonly unknown[], context: Ap
           requireNode(input.to, opIndex);
           const id = input.id ?? edgeIdFor(worldId, input.from, input.relation, input.to);
           if (edges.has(id)) fail({ code: 'DUPLICATE_ID', message: `Edge ${id} already exists.`, opIndex, id });
+          touch('edge', id, opIndex);
+          const version = bump();
           const edge: WorldEdge = {
             id,
             worldId,
@@ -465,36 +475,42 @@ export function applyOps(graph: WorldGraph, ops: readonly unknown[], context: Ap
             canon: toCanon(input.canon),
             createdBy: actor,
             updatedAt: actor.at,
-            version: retiredVersion + 1,
+            version,
             meta: input.meta ?? {},
           };
           edges.set(id, edge);
-          if (edgesByNode) indexEdge(edgesByNode, edge);
+          linkIncident(edge);
           removedEdges.delete(id);
           changedEdges.add(id);
           if (edge.canon.status === 'proposed') {
-            proposals.push({ targetType: 'edge', id, title: `${edge.from} ${edge.relation} ${edge.to}`, version: edge.version, ref: edge.canon.ref, proposedBy: actor });
+            proposals.push({ targetType: 'edge', id, title: `${edge.from} ${edge.relation} ${edge.to}`, version, ref: edge.canon.ref, proposedBy: actor });
           }
           break;
         }
         case 'removeEdge': {
           const edge = requireEdge(op.id, opIndex);
+          touch('edge', edge.id, opIndex);
           checkVersion('edge', edge.id, edge.version, op.baseVersion, opIndex);
           if (edge.canon.status === 'canon') {
             fail({ code: 'CANON_LOCKED', message: `Edge ${edge.id} is canon and cannot be removed from the canvas.`, opIndex, id: edge.id });
           }
-          dropEdge(edge);
+          bump();
+          unlinkIncident(edge);
+          edges.delete(edge.id);
+          changedEdges.delete(edge.id);
+          removedEdges.add(edge.id);
           break;
         }
         case 'proposeCanon': {
           const { type, id } = op.target;
           const current = type === 'node' ? requireNode(id, opIndex) : requireEdge(id, opIndex);
+          touch(type, id, opIndex);
           checkVersion(type, id, current.version, op.baseVersion, opIndex);
           if (current.canon.status === 'canon') {
             fail({ code: 'CANON_LOCKED', message: `${type} ${id} is already canon.`, opIndex, id });
           }
           const canon: Canon = op.ref ? { status: 'proposed', ref: op.ref } : { status: 'proposed' };
-          const version = current.version + 1;
+          const version = bump();
           if (type === 'node') {
             const node = current as WorldNode;
             nodes.set(id, { ...node, canon, updatedAt: actor.at, version });
@@ -531,12 +547,7 @@ export function applyOps(graph: WorldGraph, ops: readonly unknown[], context: Ap
     ok: true,
     graph: {
       schemaVersion: graph.schemaVersion,
-      world: {
-        ...graph.world,
-        version: graph.world.version + 1,
-        updatedAt: actor.at,
-        ...(retiredVersion > 0 ? { retiredVersion } : {}),
-      },
+      world: { ...graph.world, version: counter, updatedAt: actor.at },
       nodes: [...nodes.values()],
       edges: [...edges.values()],
     },
@@ -567,22 +578,23 @@ export function promoteToCanon(
   if (!refCheck.success) throw new Error('promoteToCanon requires an https ref to the merged canon source.');
   const stamp = actorSchema.parse(actor);
   const canon: Canon = { status: 'canon', ref };
+  const version = currentVersionFloor(graph) + 1;
   if (target.type === 'node') {
     let found = false;
     const nodes = graph.nodes.map((node) => {
       if (node.id !== target.id) return node;
       found = true;
-      return { ...node, canon, updatedAt: stamp.at, version: node.version + 1 };
+      return { ...node, canon, updatedAt: stamp.at, version };
     });
     if (!found) throw new Error(`Node ${target.id} does not exist.`);
-    return { ...graph, world: { ...graph.world, version: graph.world.version + 1, updatedAt: stamp.at }, nodes };
+    return { ...graph, world: { ...graph.world, version, updatedAt: stamp.at }, nodes };
   }
   let found = false;
   const edges = graph.edges.map((edge) => {
     if (edge.id !== target.id) return edge;
     found = true;
-    return { ...edge, canon, updatedAt: stamp.at, version: edge.version + 1 };
+    return { ...edge, canon, updatedAt: stamp.at, version };
   });
   if (!found) throw new Error(`Edge ${target.id} does not exist.`);
-  return { ...graph, world: { ...graph.world, version: graph.world.version + 1, updatedAt: stamp.at }, edges };
+  return { ...graph, world: { ...graph.world, version, updatedAt: stamp.at }, edges };
 }

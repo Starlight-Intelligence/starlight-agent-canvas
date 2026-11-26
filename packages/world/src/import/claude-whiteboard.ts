@@ -132,8 +132,6 @@ export interface ImportReport {
    * overflowed), so nothing merged into a node is lost silently.
    */
   truncated: ImportTruncation[];
-  /** Ids that appear on more than one element in an array export. */
-  duplicateIds: { id: string; occurrences: number; keys: string[] }[];
   warnings: string[];
 }
 
@@ -244,28 +242,14 @@ function safeUrl(value: string | undefined): string | undefined {
   }
 }
 
-/**
- * Reads the import timestamp. Never depends on the machine's time zone:
- * a date alone is midnight UTC, a date-time without an offset is read as UTC
- * (with a warning), and anything that is not ISO 8601 is refused.
- */
-function normalizeAt(options: ImportOptions, exportedAt: string | undefined, warnings: string[]): string {
-  const candidate = (options.at ?? exportedAt)?.trim();
+function normalizeAt(options: ImportOptions, exportedAt: string | undefined): string {
+  const candidate = options.at ?? exportedAt;
   if (!candidate) throw new Error('importClaudeWhiteboard: pass options.at; the export has no exportedAt.');
-  if (/^\d{4}-\d{2}-\d{2}$/.test(candidate) && z.iso.date().safeParse(candidate).success) return `${candidate}T00:00:00.000Z`;
-  if (z.iso.datetime().safeParse(candidate).success) return candidate;
-  let iso: string | undefined;
-  if (z.iso.datetime({ offset: true }).safeParse(candidate).success) {
-    iso = candidate;
-  } else if (z.iso.datetime({ local: true }).safeParse(candidate).success) {
-    iso = `${candidate}Z`;
-    warnings.push(`Timestamp "${candidate}" has no UTC offset; read it as UTC.`);
-  }
-  const date = iso ? new Date(iso) : undefined;
-  if (!date || Number.isNaN(date.getTime())) {
-    throw new Error(`importClaudeWhiteboard: timestamp "${candidate}" must be ISO 8601 (YYYY-MM-DD, or a date-time with Z or an offset).`);
-  }
-  return date.toISOString();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(candidate)) return `${candidate}T00:00:00.000Z`;
+  // Only absolute timestamps (Z or an explicit offset). A timestamp without a
+  // zone would depend on the host time zone and break deterministic output.
+  if (z.iso.datetime({ offset: true }).safeParse(candidate).success) return new Date(candidate).toISOString();
+  throw new Error(`importClaudeWhiteboard: timestamp "${candidate}" must be YYYY-MM-DD or an ISO datetime with Z or an offset.`);
 }
 
 function escapeRegExp(value: string): string {
@@ -285,7 +269,7 @@ export function importClaudeWhiteboard(input: unknown, options: ImportOptions = 
   const worldId = options.worldId ?? (slugify(worldTitle, 64) || 'world');
   const warnings: string[] = [];
   const truncated: ImportTruncation[] = [];
-  const at = normalizeAt(options, doc.exportedAt, warnings);
+  const at = normalizeAt(options, doc.exportedAt);
   const actor: Actor = { harness: 'importer', at };
 
   const lexKinds = new Map<string, NodeKind>();
@@ -297,39 +281,21 @@ export function importClaudeWhiteboard(input: unknown, options: ImportOptions = 
     lexTags.set(title.trim().toLowerCase(), tags);
   }
 
-  // An array export can repeat an id. Every element still gets its own key
-  // (and its own disposition): the first occurrence keeps the id, later ones
-  // become `id~2`, `id~3`, ... in input order. Arrows naming a repeated id
-  // resolve to the first occurrence, with a warning.
-  const duplicateIds: ImportReport['duplicateIds'] = [];
-  const repeatedIds = new Set<string>();
-  let rawElements: El[];
+  // Ids must be unique: a repeated id would hide one element behind another's
+  // disposition and make arrow endpoints ambiguous. Reject the export and
+  // name every repeated id.
   if (Array.isArray(doc.elements)) {
-    const taken = new Set(doc.elements.map((el) => el.id));
-    const seen = new Map<string, string[]>();
-    rawElements = doc.elements.map(({ id, ...rest }) => {
-      const keys = seen.get(id);
-      if (!keys) {
-        seen.set(id, [id]);
-        return { ...rest, key: id };
-      }
-      let key = `${id}~${keys.length + 1}`;
-      while (taken.has(key)) key = `${key}~`;
-      taken.add(key);
-      keys.push(key);
-      return { ...rest, key };
-    });
-    for (const [id, keys] of seen) {
-      if (keys.length < 2) continue;
-      repeatedIds.add(id);
-      duplicateIds.push({ id, occurrences: keys.length, keys });
-      warnings.push(`Element id "${id}" appears ${keys.length} times; imported them as ${keys.join(', ')}.`);
+    const counts = new Map<string, number>();
+    for (const el of doc.elements) counts.set(el.id, (counts.get(el.id) ?? 0) + 1);
+    const repeated = [...counts].filter(([, count]) => count > 1).sort(([a], [b]) => naturalKeyCompare(a, b));
+    if (repeated.length > 0) {
+      throw new Error(`importClaudeWhiteboard: ${repeated.map(([id, count]) => `duplicate element id "${id}" (${count} elements)`).join(', ')} in the export.`);
     }
-    duplicateIds.sort((a, b) => naturalKeyCompare(a.id, b.id));
-  } else {
-    rawElements = Object.entries(doc.elements).map(([key, value]) => ({ ...value, key }));
   }
-  const elements: El[] = rawElements.sort((a, b) => naturalKeyCompare(a.key, b.key));
+  const elements: El[] = (Array.isArray(doc.elements)
+    ? doc.elements.map(({ id, ...rest }) => ({ ...rest, key: id }))
+    : Object.entries(doc.elements).map(([key, value]) => ({ ...value, key }))
+  ).sort((a, b) => naturalKeyCompare(a.key, b.key));
   const byKey = new Map(elements.map((el) => [el.key, el]));
 
   const disposition = new Map<string, ElementDisposition>();
@@ -923,11 +889,6 @@ export function importClaudeWhiteboard(input: unknown, options: ImportOptions = 
     return undefined;
   };
   for (const arrow of elements.filter((el) => el.type === 'arrow')) {
-    for (const end of [arrow.from, arrow.to]) {
-      if (end && repeatedIds.has(end)) {
-        warnings.push(`Arrow ${arrow.key} points at "${end}", which ${duplicateIds.find((d) => d.id === end)!.occurrences} elements share; resolved it to the first in input order.`);
-      }
-    }
     const from = nodeForElement(arrow.from);
     const to = nodeForElement(arrow.to);
     if (!from || !to) {
@@ -1006,7 +967,6 @@ export function importClaudeWhiteboard(input: unknown, options: ImportOptions = 
       return status.as === 'skipped' ? [{ elementId: el.key, reason: status.reason }] : [];
     }),
     truncated,
-    duplicateIds,
     warnings,
   };
 

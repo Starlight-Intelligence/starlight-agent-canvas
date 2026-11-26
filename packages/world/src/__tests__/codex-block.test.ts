@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { runImportWhiteboard } from '../cli/run-import.js';
 import { importClaudeWhiteboard } from '../import/claude-whiteboard.js';
 import { applyOps } from '../ops.js';
-import { mediaSchema, worldGraphSchema } from '../schemas.js';
+import { mediaSchema } from '../schemas.js';
 import { validateWorldGraph } from '../validate.js';
 import { MAX_TILES_PER_QUERY, tileKeysForBounds } from '../zoom.js';
 import { claude, sampleGraph } from './helpers.js';
@@ -35,24 +35,18 @@ describe('#64 Codex block 1: versions are never reused after delete + recreate',
     const staleDelete = applyOps(recreated.graph, [{ op: 'removeNode', id: 'n_a', baseVersion: 1 }], ctx);
     expect(staleDelete.ok).toBe(false);
     expect(validateWorldGraph(recreated.graph).ok).toBe(true);
-    expect(worldGraphSchema.parse(recreated.graph).world.retiredVersion).toBeGreaterThanOrEqual(1);
   });
 
-  it('holds within one batch and for edges', () => {
-    const result = applyOps(sampleGraph(), [
-      { op: 'removeEdge', id: 'e_ab', baseVersion: 1 },
-      { op: 'addEdge', edge: { id: 'e_ab', from: 'n_a', to: 'n_b', relation: 'located-at' } },
-    ], ctx);
+  it('holds for edges', () => {
+    const removed = applyOps(sampleGraph(), [{ op: 'removeEdge', id: 'e_ab', baseVersion: 1 }], ctx);
+    expect(removed.ok).toBe(true);
+    if (!removed.ok) return;
+    const result = applyOps(removed.graph, [{ op: 'addEdge', edge: { id: 'e_ab', from: 'n_a', to: 'n_b', relation: 'located-at' } }], ctx);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     const edge = result.graph.edges.find((e) => e.id === 'e_ab')!;
     expect(edge.version).toBeGreaterThan(1);
     expect(applyOps(result.graph, [{ op: 'removeEdge', id: 'e_ab', baseVersion: 1 }], ctx).ok).toBe(false);
-  });
-
-  it('a fresh world still starts new entities at version 1', () => {
-    const result = applyOps(sampleGraph(), [{ op: 'addNode', node: { id: 'n_new', kind: 'note', title: 'New', position: { x: 1, y: 1 } } }], ctx);
-    expect(result.ok && result.graph.nodes.find((n) => n.id === 'n_new')!.version).toBe(1);
   });
 });
 
@@ -89,7 +83,7 @@ describe('#64 Codex block 3: tile queries are capped and precision-safe', () => 
   it('refuses finite but huge bounds instead of looping or allocating', () => {
     expect(() => tileKeysForBounds({ x: 1e300, y: 0, w: 1e300, h: 1 })).toThrow(RangeError);
     expect(() => tileKeysForBounds({ x: 2 ** 70, y: 0, w: 1, h: 1 })).toThrow(RangeError);
-    expect(() => tileKeysForBounds({ x: 0, y: 0, w: 2048 * 1000, h: 2048 * 1000 })).toThrow(/at most/);
+    expect(() => tileKeysForBounds({ x: 0, y: 0, w: 2048 * 1000, h: 2048 * 1000 })).toThrow(RangeError);
   });
 
   it('still lists normal areas, up to the cap', () => {
@@ -141,30 +135,16 @@ describe('#64 Codex block 4: clipped merged text is reported and kept', () => {
 });
 
 describe('#64 Codex block 5: duplicate ids in array exports', () => {
-  it('reports each duplicate, keeps every element, and resolves arrows to the first occurrence', () => {
-    const result = importClaudeWhiteboard(exportWith([
+  it('rejects the export and names every repeated id, so no element or arrow endpoint is hidden', () => {
+    const input = exportWith([
       { id: 'a', type: 'text', size: 'body', text: 'First note with the id a.', x: 0, y: 0 },
       { id: 'b', type: 'text', size: 'body', text: 'Target note.', x: 0, y: 400 },
       { id: 'a', type: 'text', size: 'body', text: 'Second note that reuses a.', x: 0, y: 800 },
+      { id: 'b', type: 'text', size: 'body', text: 'Second b.', x: 0, y: 1200 },
+      { id: 'b', type: 'text', size: 'body', text: 'Third b.', x: 0, y: 1600 },
       { id: 'arrow', type: 'arrow', from: 'a', to: 'b' },
-    ]), { worldId: 'codex' });
-    expect(result.report.duplicateIds).toEqual([{ id: 'a', occurrences: 2, keys: ['a', 'a~2'] }]);
-    expect(result.report.elementsIn).toBe(4);
-    expect(Object.keys(result.elements).sort()).toEqual(['a', 'a~2', 'arrow', 'b'].sort());
-    expect(result.elements['a~2']).toMatchObject({ as: 'node' });
-    expect(result.graph.nodes.some((n) => n.title.startsWith('Second note'))).toBe(true);
-    const first = result.elements.a as { nodeId: string };
-    const edge = result.graph.edges.find((e) => e.relation === 'precedes')!;
-    expect(edge.from).toBe(first.nodeId);
-    expect(result.report.warnings.some((w) => w.includes('arrow') && w.includes('"a"'))).toBe(true);
-    // Deterministic: same input, same output.
-    const again = importClaudeWhiteboard(exportWith([
-      { id: 'a', type: 'text', size: 'body', text: 'First note with the id a.', x: 0, y: 0 },
-      { id: 'b', type: 'text', size: 'body', text: 'Target note.', x: 0, y: 400 },
-      { id: 'a', type: 'text', size: 'body', text: 'Second note that reuses a.', x: 0, y: 800 },
-      { id: 'arrow', type: 'arrow', from: 'a', to: 'b' },
-    ]), { worldId: 'codex' });
-    expect(JSON.stringify(again)).toBe(JSON.stringify(result));
+    ]);
+    expect(() => importClaudeWhiteboard(input, { worldId: 'codex' })).toThrow(/duplicate element id "a" \(2 elements\), duplicate element id "b" \(3 elements\)/);
   });
 });
 
@@ -228,10 +208,9 @@ describe('#64 Codex block 7: media href allows only http(s) and relative/R2 keys
 });
 
 describe('#64 non-blocking review items', () => {
-  it('reads an offset-less timestamp as UTC regardless of the machine time zone', () => {
-    const result = importClaudeWhiteboard(exportWith({ t1: { type: 'text', size: 'body', text: 'A note.', x: 0, y: 0 } }, { exportedAt: '2026-01-02T10:00:00' }), { worldId: 'codex' });
-    expect(result.graph.world.updatedAt).toBe('2026-01-02T10:00:00.000Z');
-    expect(() => importClaudeWhiteboard(exportWith({}, { exportedAt: 'Jan 2 2026' }), { worldId: 'codex' })).toThrow(/ISO 8601/);
+  it('never reads a timestamp in the machine time zone', () => {
+    expect(() => importClaudeWhiteboard(exportWith({}, { exportedAt: '2026-01-02T10:00:00' }), { worldId: 'codex' })).toThrow(/Z or an offset/);
+    expect(() => importClaudeWhiteboard(exportWith({}, { exportedAt: 'Jan 2 2026' }), { worldId: 'codex' })).toThrow(/Z or an offset/);
     const offset = importClaudeWhiteboard(exportWith({}, { exportedAt: '2026-01-02T10:00:00+02:00' }), { worldId: 'codex' });
     expect(offset.graph.world.updatedAt).toBe('2026-01-02T08:00:00.000Z');
   });
