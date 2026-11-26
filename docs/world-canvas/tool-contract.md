@@ -1,6 +1,6 @@
 # World Canvas MCP Tool Contract (as the client sees it)
 
-Status: written by lane L5 on 2026-11-25 for issue #63. It mirrors L2's server on branch `agent/claude-cloud/world-edge` at commit 161c054 (`apps/world-edge/src/tools.ts`, `mcp.ts`, `world-agent.ts`, `region.ts`, `indexing.ts`, `store.ts`). L2's code is the authority for the server; spec section 8 names the tools but not the exact shapes. If L2 changes a shape, `@starlight-agent-canvas/world-agents` must change with it, because the client validates every result.
+Status: written by lane L5 on 2026-11-25 for issue #63. It mirrors L2's server on branch `agent/claude-cloud/world-edge` (first written against 161c054, rechecked against 4705a14, the L2 head merged into the integration branch) (`apps/world-edge/src/tools.ts`, `mcp.ts`, `world-agent.ts`, `region.ts`, `indexing.ts`, `store.ts`). L2's code is the authority for the server; spec section 8 names the tools but not the exact shapes. If L2 changes a shape, `@starlight-agent-canvas/world-agents` must change with it, because the client validates every result.
 
 Input schemas are shared with the server from `packages/world/src/tools.ts` (`WORLD_TOOL_INPUTS`). The client's output schemas are in `packages/world-agents/src/client/tools.ts` (`WORLD_TOOLS`). Entity schemas (`WorldNode`, `WorldEdge`, `World`, `Actor`, ops) are L1's, from `packages/world`.
 
@@ -48,7 +48,7 @@ Unknown extra keys on objects are ignored, so additive server fields are safe.
 
 `get_region` by level: `cluster` returns per-tile `clusters` and empty `nodes` and `edges`; `card` returns node cards (`{id, kind, title, tags, position, size?, regionId, layer, canon, version, thumbnail?}`) and edge summaries (`{id, from, to, relation, label?, canon, version}`); `full` returns whole `WorldNode` and `WorldEdge` objects. Cards carry `version`, so agents can take `baseVersion` from them, but they have no `summary` or `body`: read at `full` before editing text. If `truncated` is true, more nodes matched than `limit`.
 
-`propose_canon` does not open a PR. It marks the targets `proposed` and stores a proposal row (`{id, title, nodeIds, edgeIds, rationale, status: "open", prUrl: null, worldVersion, harness, actor, createdAt}`, readable at `GET /agents/world-agent/<worldId>/proposals?status=open`). `canonProposalRequestFromRow` in `world-agents` turns such a row into input for `openCanonPr`, which opens the draft PR. As of 161c054 nothing runs this automatically, and rows that name edges are refused (`UNSUPPORTED_TARGET`) because canon-pr handles nodes only.
+`propose_canon` does not open a PR. It marks the targets `proposed` and stores a proposal row (`{id, title, nodeIds, edgeIds, rationale, status: "open", prUrl: null, worldVersion, harness, actor, createdAt}`, readable at `GET /agents/world-agent/<worldId>/proposals?status=open`). `canonProposalRequestFromRow` in `world-agents` turns such a row into input for `openCanonPr`, which opens the draft PR. As of 4705a14 nothing runs this automatically, and rows that name edges are refused (`UNSUPPORTED_TARGET`) because canon-pr handles nodes only.
 
 ## Errors
 
