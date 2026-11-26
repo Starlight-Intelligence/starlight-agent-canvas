@@ -79,6 +79,19 @@ function usePrefersReducedMotion(): boolean {
   return reduce;
 }
 
+/** True on the narrow layout, where the inspector is a sheet over the canvas (world.css, 860px). */
+function useNarrowLayout(): boolean {
+  const [narrow, setNarrow] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 860px)');
+    const update = () => setNarrow(mq.matches);
+    update();
+    mq.addEventListener('change', update);
+    return () => mq.removeEventListener('change', update);
+  }, []);
+  return narrow;
+}
+
 export default function WorldCanvas(props: { worldId: string; stressNodes?: number }) {
   return (
     <ReactFlowProvider>
@@ -91,6 +104,7 @@ function WorldCanvasInner({ worldId, stressNodes }: { worldId: string; stressNod
   const rf = useReactFlow();
   const level = useSemanticLevel();
   const reduceMotion = usePrefersReducedMotion();
+  const narrow = useNarrowLayout();
   const duration = reduceMotion ? 0 : 360;
 
   const [source, setSource] = useState<WorldSource | null>(null);
@@ -113,6 +127,7 @@ function WorldCanvasInner({ worldId, stressNodes }: { worldId: string; stressNod
   const [activityOpen, setActivityOpen] = useState(false);
   const [message, setMessage] = useState('');
   const [rfNodes, setRfNodes] = useState<Node[]>([]);
+  const [canvasFocus, setCanvasFocus] = useState(false);
 
   const stageRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -353,6 +368,18 @@ function WorldCanvasInner({ worldId, stressNodes }: { worldId: string; stressNod
     if (view === 'map' && summary) requestAnimationFrame(() => void rf.fitBounds(rect(summary.bounds), { padding: 0.06, duration: 0 }));
   }, [view, summary, rf]);
 
+  // On the narrow layout the inspector is a sheet over the canvas. While it is
+  // open and focus is outside the canvas (in the sheet or the top bar), canvas
+  // nodes leave the tab order so Tab cannot reach nodes hidden behind the sheet.
+  // Taps on the visible part of the canvas still work (unlike inert).
+  const sheetOpen = narrow && Boolean(selectedNode || pendingLink?.to);
+  const canvasTabbable = !sheetOpen || canvasFocus;
+  useEffect(() => {
+    const sync = () => setCanvasFocus(Boolean((document.activeElement as HTMLElement | null)?.closest?.('.wc-stage')));
+    document.addEventListener('focusin', sync);
+    return () => document.removeEventListener('focusin', sync);
+  }, []);
+
   const tintByRegion = useMemo(() => new Map(clusters.map((c) => [c.regionId, c.color])), [clusters]);
 
   // World nodes to render: graph view uses tiles in the padded viewport only.
@@ -407,11 +434,11 @@ function WorldCanvasInner({ worldId, stressNodes }: { worldId: string; stressNod
         data: { title: c.title, tint: c.color, total: c.total, counts: countLine(c.byKind, 3), mode: view === 'map' ? ('map' as const) : ('graph' as const) },
         selectable: false,
         draggable: false,
-        focusable: view === 'map' || level === 'cluster',
+        focusable: canvasTabbable && (view === 'map' || level === 'cluster'),
         zIndex: -1,
         ariaLabel: `Region ${c.title}`,
       }));
-  }, [clusters, view, level, timeline, timelinePositions]);
+  }, [clusters, view, level, timeline, timelinePositions, canvasTabbable]);
 
   const derivedNodes = useMemo<Node[]>(() => {
     const out: Node[] = [...regionFlowNodes];
@@ -505,7 +532,7 @@ function WorldCanvasInner({ worldId, stressNodes }: { worldId: string; stressNod
     if (!outcome.ok) {
       const e = outcome.error;
       announce(
-        e.code === 'STALE_VERSION' ? 'This node changed elsewhere. The latest version is loaded; apply your edit again.'
+        e.code === 'STALE_VERSION' ? 'This node changed elsewhere. The latest version is loaded and your draft is kept; save again to apply it.'
         : e.code === 'DUPLICATE_ID' ? 'That relation already exists.'
         : e.code === 'CANON_LOCKED' ? 'Canon is locked. Propose a change through git instead.'
         : e.message,
@@ -617,12 +644,70 @@ function WorldCanvasInner({ worldId, stressNodes }: { worldId: string; stressNod
     else void rf.fitView({ padding: 0.1, duration });
   }, [view, summary, rf, duration]);
 
-  /** Focus a node's DOM element, waiting for it to mount if the camera is still panning to it. */
-  const focusFlowNode = useCallback((id: string, attempts = 30) => {
-    const el = stageRef.current?.querySelector<HTMLElement>(`.react-flow__node[data-id="${CSS.escape(id)}"]`);
-    if (el) el.focus({ preventScroll: true });
-    else if (attempts > 0) requestAnimationFrame(() => focusFlowNode(id, attempts - 1));
+  /**
+   * Focus a node's DOM element, waiting for it to mount while the camera pans
+   * and its tiles load. Falls back to the stage so focus is never lost to <body>.
+   */
+  const focusFlowNode = useCallback((id: string, attempts = 120) => {
+    // Arrow navigation is a deliberate move into the canvas: make nodes tabbable again.
+    setCanvasFocus(true);
+    const el = stageRef.current?.querySelector<HTMLElement>(`.react-flow__node[data-id="${CSS.escape(id)}"][tabindex]`);
+    // A node that just mounted stays visibility:hidden until xyflow measures it,
+    // and focus() on it silently does nothing, so check that focus landed.
+    el?.focus({ preventScroll: true });
+    if (el && document.activeElement === el) return;
+    if (attempts > 0) requestAnimationFrame(() => focusFlowNode(id, attempts - 1));
+    else stageRef.current?.focus({ preventScroll: true });
   }, []);
+
+  /** Node getting focus back after the inspector closed; focusing it must not reopen the inspector. */
+  const returningFocus = useRef<string | null>(null);
+
+  /** Close the inspector and return focus to the node it was showing. */
+  const closeInspector = useCallback(() => {
+    const returnTo = pendingLink?.from ?? selectedId;
+    returningFocus.current = returnTo;
+    // If the node never mounts (focus falls back to the stage), forget it.
+    window.setTimeout(() => {
+      if (returningFocus.current === returnTo) returningFocus.current = null;
+    }, 2500);
+    setSelectedId(null);
+    setPendingLink(null);
+    if (pendingLink) setTool('select');
+    if (returnTo) requestAnimationFrame(() => focusFlowNode(returnTo));
+    else requestAnimationFrame(() => stageRef.current?.focus({ preventScroll: true }));
+  }, [pendingLink, selectedId, focusFlowNode]);
+
+  /**
+   * Arrow navigation past the rendered area: look for the nearest node in that
+   * direction in the source (widening the search), then pan to it and focus it.
+   */
+  const navigateBeyond = useCallback(async (from: { x: number; y: number }, dir: 'left' | 'right' | 'up' | 'down') => {
+    if (!source || !vp) return;
+    const base = Math.max(vp.w, vp.h, TILE_SIZE / 2);
+    for (const span of [base * 2, base * 6, base * 24]) {
+      const bounds: Bounds =
+        dir === 'right' ? { x: from.x, y: from.y - span, w: span, h: span * 2 }
+        : dir === 'left' ? { x: from.x - span, y: from.y - span, w: span, h: span * 2 }
+        : dir === 'down' ? { x: from.x - span, y: from.y, w: span * 2, h: span }
+        : { x: from.x - span, y: from.y - span, w: span * 2, h: span };
+      const batch = await source.getRegion({ bounds });
+      const centers = batch.nodes.map((n) => {
+        const b = boxOf(n);
+        return { id: n.id, x: b.x + b.w / 2, y: b.y + b.h / 2, node: n };
+      });
+      const nextId = nearestInDirection(from, centers, dir);
+      if (!nextId) continue;
+      const next = centers.find((c) => c.id === nextId)!;
+      titles.current.set(next.id, next.node.title);
+      setSelectedId(next.id);
+      await centerOn(boxOf(next.node), rf.getZoom(), duration, true);
+      updateVp(rf.getViewport());
+      requestAnimationFrame(() => focusFlowNode(next.id));
+      return;
+    }
+    announce(`No more nodes ${dir === 'left' || dir === 'right' ? `to the ${dir}` : dir === 'up' ? 'above' : 'below'}.`);
+  }, [source, vp, centerOn, rf, duration, updateVp, focusFlowNode, announce]);
 
   const onKeyDown = useCallback((e: KeyboardEvent) => {
     const target = (e.target instanceof HTMLElement ? e.target : document.body) as HTMLElement;
@@ -661,21 +746,28 @@ function WorldCanvasInner({ worldId, stressNodes }: { worldId: string; stressNod
     const dir = key === 'ArrowLeft' ? 'left' : key === 'ArrowRight' ? 'right' : key === 'ArrowUp' ? 'up' : key === 'ArrowDown' ? 'down' : null;
     if (!dir) return;
     e.preventDefault();
+    // Regions are the targets in Map and at cluster zoom in Graph. Timeline always
+    // moves between its nodes (its lane bands use lane: ids and are not targets).
+    const regionTargets = view === 'map' || (view === 'graph' && level === 'cluster');
     const candidates = rfNodes
-      .filter((n) => (level === 'cluster' || view === 'map' ? n.id.startsWith('region:') : !n.id.startsWith('region:') && !n.id.startsWith('lane:')))
+      .filter((n) => (regionTargets ? n.id.startsWith('region:') : !n.id.startsWith('region:') && !n.id.startsWith('lane:')))
       .map((n) => ({ id: n.id, x: n.position.x + (n.measured?.width ?? n.width ?? 0) / 2, y: n.position.y + (n.measured?.height ?? n.height ?? 0) / 2 }));
     const focusedId = target.closest<HTMLElement>('.react-flow__node')?.dataset.id;
     const current = candidates.find((c) => c.id === (focusedId ?? selectedId));
     const from = current ?? (vp ? { x: vp.x + vp.w / 2, y: vp.y + vp.h / 2 } : { x: 0, y: 0 });
     const nextId = current ? nearestInDirection(from, candidates, dir) : candidates.sort((a, b) => Math.hypot(a.x - from.x, a.y - from.y) - Math.hypot(b.x - from.x, b.y - from.y))[0]?.id;
-    if (!nextId) return;
+    if (!nextId) {
+      // Graph view renders only the padded viewport; the next node may be further out.
+      if (view === 'graph' && !regionTargets) void navigateBeyond(from, dir);
+      return;
+    }
     if (!nextId.startsWith('region:')) setSelectedId(nextId);
     const c = candidates.find((x) => x.id === nextId)!;
     if (vp && !boundsIntersect({ x: c.x - 1, y: c.y - 1, w: 2, h: 2 }, pad(vp, -Math.min(vp.w, vp.h) * 0.15))) {
       void rf.setCenter(c.x, c.y, { zoom: rf.getZoom(), duration });
     }
     requestAnimationFrame(() => focusFlowNode(nextId));
-  }, [pendingLink, selectedId, rf, duration, fit, addNode, enterRegion, rfNodes, level, view, vp, focusFlowNode]);
+  }, [pendingLink, selectedId, rf, duration, fit, addNode, enterRegion, rfNodes, level, view, vp, focusFlowNode, navigateBeyond]);
 
   // Window-level so shortcuts work when focus sits on <body> (after a pane click, or on load).
   const keyHandler = useRef(onKeyDown);
@@ -689,6 +781,10 @@ function WorldCanvasInner({ worldId, stressNodes }: { worldId: string; stressNod
   const onStageFocus = useCallback((e: React.FocusEvent<HTMLDivElement>) => {
     const el = (e.target as HTMLElement).closest<HTMLElement>('.react-flow__node');
     const id = el?.dataset.id;
+    if (id && id === returningFocus.current) {
+      returningFocus.current = null;
+      return;
+    }
     if (id && !id.startsWith('region:') && !id.startsWith('lane:') && id !== selectedId && tool !== 'link') setSelectedId(id);
   }, [selectedId, tool]);
 
@@ -731,7 +827,7 @@ function WorldCanvasInner({ worldId, stressNodes }: { worldId: string; stressNod
       />
       <div className="wc-body">
         {activityOpen ? <ActivityRail entries={activity} onClose={() => setActivityOpen(false)} onJump={(id) => void jumpTo(id)} /> : null}
-        <div className="wc-stage" ref={stageRef} aria-label={`${summary?.world.title ?? 'World'} canvas. Arrow keys move between nodes, Enter edits, slash searches.`}>
+        <div className="wc-stage" ref={stageRef} tabIndex={-1} aria-label={`${summary?.world.title ?? 'World'} canvas. Arrow keys move between nodes, Enter edits, slash searches.`}>
           <ReactFlow
             nodes={rfNodes}
             edges={rfEdges}
@@ -749,6 +845,7 @@ function WorldCanvasInner({ worldId, stressNodes }: { worldId: string; stressNod
             minZoom={0.02}
             maxZoom={3}
             nodesConnectable={tool === 'link'}
+            nodesFocusable={canvasTabbable}
             nodesDraggable={view === 'graph' && tool === 'select'}
             elementsSelectable={tool !== 'pan'}
             panOnDrag
@@ -804,10 +901,7 @@ function WorldCanvasInner({ worldId, stressNodes }: { worldId: string; stressNod
             titleOf={titleOf}
             source={source}
             pendingLink={pendingLink}
-            onClose={() => {
-              setSelectedId(null);
-              setPendingLink(null);
-            }}
+            onClose={closeInspector}
             onSave={onSave}
             onProposeCanon={onProposeCanon}
             onLink={onLink}

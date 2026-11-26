@@ -4,7 +4,10 @@ import { forwardRef, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowRight, Link2, X } from 'lucide-react';
 import { NODE_KINDS, RELATIONS } from '@starlight-agent-canvas/world';
 import type { NodeKind, Relation, WorldEdge, WorldNode } from '@starlight-agent-canvas/world';
+import type { CanonProposal } from '@starlight-agent-canvas/world';
 import type { SearchHit, WorldSource } from '@/lib/world/source';
+
+type DraftField = 'title' | 'kind' | 'summary' | 'body' | 'tags';
 import { CanonBadge } from './nodes';
 import { KIND_META, KindGlyph } from './kinds';
 
@@ -50,24 +53,37 @@ export const Inspector = forwardRef<HTMLInputElement, InspectorProps>(function I
   const [tags, setTags] = useState('');
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
+  // Current field values, readable after an await in the submit handler.
+  const latest = useRef<Record<DraftField, string>>({ title, kind, summary, body, tags });
+  latest.current = { title, kind, summary, body, tags };
 
-  // Last node content copied into the form. A new version (a move, or an edit
-  // elsewhere) only replaces fields the user has not changed, so a drag before
-  // saving does not discard a draft. Selecting another node resets everything.
-  const synced = useRef<WorldNode | null>(null);
+  // Fields the user has typed in since the last successful save. A new node
+  // version (a move, an optimistic save, a rollback or an edit elsewhere)
+  // refreshes only the other fields, so neither a drag nor a rejected save
+  // discards a draft. Selecting another node resets everything.
+  const edited = useRef(new Set<DraftField>());
+  const shownId = useRef<string | null>(null);
+  const [saveFailed, setSaveFailed] = useState(false);
   useEffect(() => {
     if (!node) return;
-    const prev = synced.current;
-    const fresh = !prev || prev.id !== node.id;
-    const keep = (local: string, before: string | undefined) => !fresh && before !== undefined && local !== before;
-    if (!keep(title, prev?.title)) setTitle(node.title);
-    if (!keep(kind, prev?.kind)) setKind(node.kind);
-    if (!keep(summary, prev?.summary)) setSummary(node.summary);
-    if (!keep(body, prev?.body)) setBody(node.body);
-    if (!keep(tags, prev?.tags.join(', '))) setTags(node.tags.join(', '));
-    if (fresh) setNote('');
-    synced.current = node;
+    if (shownId.current !== node.id) {
+      edited.current.clear();
+      setNote('');
+      setSaveFailed(false);
+      shownId.current = node.id;
+    }
+    const kept = edited.current;
+    if (!kept.has('title')) setTitle(node.title);
+    if (!kept.has('kind')) setKind(node.kind);
+    if (!kept.has('summary')) setSummary(node.summary);
+    if (!kept.has('body')) setBody(node.body);
+    if (!kept.has('tags')) setTags(node.tags.join(', '));
   }, [node?.id, node?.version]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const edit = <T,>(field: DraftField, set: (v: T) => void) => (value: T) => {
+    edited.current.add(field);
+    set(value);
+  };
 
   const patch = useMemo(() => {
     if (!node) return {};
@@ -82,12 +98,26 @@ export const Inspector = forwardRef<HTMLInputElement, InspectorProps>(function I
   }, [node, title, kind, summary, body, tags]);
 
   const dirty = Object.keys(patch).length > 0;
+  const proposal = node && source.kind === 'local' && 'proposals' in source
+    ? (source as WorldSource & { proposals(): CanonProposal[] }).proposals().find((p) => p.targetType === 'node' && p.id === node.id)
+    : undefined;
   const locked = node?.canon.status === 'canon';
 
   if (!node && !pendingLink) return null;
 
   return (
-    <aside className="wc-inspector" aria-label="Inspector">
+    <aside
+      className="wc-inspector"
+      aria-label="Inspector"
+      onKeyDown={(e) => {
+        // Escape closes from anywhere inside, including form fields.
+        if (e.key !== 'Escape' || e.defaultPrevented) return;
+        e.preventDefault();
+        e.stopPropagation();
+        if (pendingLink?.to) onCancelLink();
+        else onClose();
+      }}
+    >
       {pendingLink && pendingLink.to ? (
         <RelationPicker
           from={pendingLink.from}
@@ -105,8 +135,14 @@ export const Inspector = forwardRef<HTMLInputElement, InspectorProps>(function I
             e.preventDefault();
             if (!dirty || locked) return;
             setBusy(true);
-            await onSave(node, patch);
+            const submitted = { ...latest.current };
+            const ok = await onSave(node, patch);
             setBusy(false);
+            setSaveFailed(!ok);
+            if (ok) {
+              // Fields typed in again while saving stay a draft.
+              for (const f of [...edited.current]) if (latest.current[f] === submitted[f]) edited.current.delete(f);
+            }
           }}
         >
           <header className="wc-inspector-head">
@@ -120,32 +156,32 @@ export const Inspector = forwardRef<HTMLInputElement, InspectorProps>(function I
 
           <label className="wc-field">
             <span>Title</span>
-            <input ref={titleRef} value={title} onChange={(e) => setTitle(e.target.value)} disabled={locked} maxLength={300} required />
+            <input ref={titleRef} value={title} onChange={(e) => edit('title', setTitle)(e.target.value)} disabled={locked} maxLength={300} required />
           </label>
           <label className="wc-field">
             <span>Kind</span>
-            <select value={kind} onChange={(e) => setKind(e.target.value as NodeKind)} disabled={locked}>
+            <select value={kind} onChange={(e) => edit('kind', setKind)(e.target.value as NodeKind)} disabled={locked}>
               {NODE_KINDS.map((k) => <option key={k} value={k}>{KIND_META[k].label}</option>)}
             </select>
           </label>
           <label className="wc-field">
             <span>Summary</span>
-            <textarea value={summary} onChange={(e) => setSummary(e.target.value)} rows={3} disabled={locked} maxLength={2000} />
+            <textarea value={summary} onChange={(e) => edit('summary', setSummary)(e.target.value)} rows={3} disabled={locked} maxLength={2000} />
           </label>
           <label className="wc-field">
             <span>Body</span>
-            <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={6} disabled={locked} placeholder="Markdown" />
+            <textarea value={body} onChange={(e) => edit('body', setBody)(e.target.value)} rows={6} disabled={locked} placeholder="Markdown" />
           </label>
           <label className="wc-field">
             <span>Tags</span>
-            <input value={tags} onChange={(e) => setTags(e.target.value)} disabled={locked} placeholder="Comma separated" />
+            <input value={tags} onChange={(e) => edit('tags', setTags)(e.target.value)} disabled={locked} placeholder="Comma separated" />
           </label>
 
           <div className="wc-inspector-actions">
             <button type="submit" className="wc-btn wc-btn--primary" disabled={!dirty || busy || locked}>
               {busy ? 'Saving' : 'Save changes'}
             </button>
-            {dirty ? <span className="wc-muted">Unsaved changes</span> : null}
+            {dirty ? <span className="wc-muted" role="status">{saveFailed ? 'Not saved. Your draft is kept; save again to retry.' : 'Unsaved changes'}</span> : null}
           </div>
 
           <section className="wc-section" aria-labelledby="canon-heading">
@@ -173,7 +209,10 @@ export const Inspector = forwardRef<HTMLInputElement, InspectorProps>(function I
               </>
             ) : node.canon.status === 'proposed' ? (
               <p className="wc-muted">
-                Proposed. {node.canon.ref ? <a href={node.canon.ref} target="_blank" rel="noreferrer">Open the canon PR</a> : 'Waiting for the canon PR.'} Editing content moves it back to draft.
+                {source.kind === 'local'
+                  ? `Proposed in this local world${proposal ? ` at v${proposal.version}` : ''}. Local mode has no canon PR queue, so nothing is queued; open the canon PR through the git flow. `
+                  : 'Proposed. '}
+                {node.canon.ref ? <a href={node.canon.ref} target="_blank" rel="noreferrer">Open the canon PR</a> : 'Waiting for the canon PR.'} Editing content moves it back to draft.
               </p>
             ) : (
               <p className="wc-muted">

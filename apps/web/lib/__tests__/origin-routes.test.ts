@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/lib/world/world-files', () => ({
-  applyWorldOps: vi.fn(async () => ({ ok: true, graph: { world: { version: 2 } }, changed: {}, proposals: [] })),
+  applyWorldOps: vi.fn(async () => ({ ok: true, graph: { world: { version: 2 }, nodes: [], edges: [] }, changed: { nodes: [], edges: [], removedNodes: [], removedEdges: [] }, proposals: [] })),
   readWorld: vi.fn(async () => {
     throw new Error("ENOENT: no such file, open '/home/secret/.starlight/world.json'");
   }),

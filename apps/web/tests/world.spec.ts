@@ -166,4 +166,91 @@ test.describe('world canvas', () => {
     await expect.poll(() => versionOf(inspector)).toBeGreaterThan(before);
     await expect(inspector.getByLabel('Summary')).toHaveValue('Draft that must survive a move');
   });
+
+  test('a rejected save keeps the draft and shows it as unsaved', async ({ page }, info) => {
+    const id = info.project.name === 'mobile' ? 'n_gen_9' : 'n_gen_8';
+    await page.route('**/api/worlds/demo/ops', (route) =>
+      route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ ok: false, error: { code: 'STALE_VERSION', message: 'stale' } }) }),
+    );
+    await page.goto(`/world/demo?node=${id}`);
+    await ready(page);
+    const inspector = page.getByRole('complementary', { name: 'Inspector' });
+    const before = await versionOf(inspector);
+    await inspector.getByLabel('Summary').fill('Draft the server refused');
+    await inspector.getByRole('button', { name: 'Save changes' }).click();
+    await expect(page.locator('.wc-toast')).toContainText('changed elsewhere');
+    // The rollback and reload have landed: the node is back at its server version.
+    await expect.poll(() => versionOf(inspector)).toBe(before);
+    await expect(inspector.getByLabel('Summary')).toHaveValue('Draft the server refused');
+    await expect(inspector.getByText('Not saved. Your draft is kept')).toBeVisible();
+    await expect(inspector.getByRole('button', { name: 'Save changes' })).toBeEnabled();
+  });
+
+  test('Escape inside an inspector field closes it and returns focus to the node', async ({ page }) => {
+    await page.goto('/world/demo?node=n_gen_10&zoom=1');
+    await ready(page);
+    const inspector = page.getByRole('complementary', { name: 'Inspector' });
+    await inspector.getByLabel('Summary').focus();
+    await page.keyboard.press('Escape');
+    await expect(inspector).toHaveCount(0);
+    await expect(page.locator('.react-flow__node[data-id="n_gen_10"]')).toBeFocused();
+  });
+
+  test('closing the inspector from the keyboard returns focus to the node', async ({ page }) => {
+    await page.goto('/world/demo?node=n_gen_12&zoom=1');
+    await ready(page);
+    const inspector = page.getByRole('complementary', { name: 'Inspector' });
+    await inspector.getByRole('button', { name: 'Close inspector' }).focus();
+    await page.keyboard.press('Enter');
+    await expect(inspector).toHaveCount(0);
+    await expect(page.locator('.react-flow__node[data-id="n_gen_12"]')).toBeFocused();
+  });
+
+  test('on mobile, Tab from the inspector sheet does not reach canvas nodes behind it', async ({ page }, info) => {
+    test.skip(info.project.name !== 'mobile', 'the inspector is a sheet over the canvas only on narrow screens');
+    await page.goto('/world/demo?node=n_gen_0&zoom=1');
+    await ready(page);
+    const inspector = page.getByRole('complementary', { name: 'Inspector' });
+    await inspector.getByRole('button', { name: 'Close inspector' }).focus();
+    for (let i = 0; i < 10; i++) {
+      await page.keyboard.press('Shift+Tab');
+      expect(await page.evaluate(() => Boolean(document.activeElement?.closest('.wc-stage .react-flow')))).toBe(false);
+    }
+  });
+
+  test('arrow keys reach a node beyond the rendered area and pan to it', async ({ page, request }, info) => {
+    const mobile = info.project.name === 'mobile';
+    const id = `n_far_${info.project.name}`;
+    const start = mobile ? 'n_gen_23' : 'n_gen_7';
+    // Right of the right-most column, far outside the rendered (padded) viewport at this zoom.
+    await request.post('/api/worlds/demo/ops', {
+      headers: { 'content-type': 'application/json' },
+      data: { ops: [{ op: 'addNode', node: { id, kind: 'note', title: `Far beacon ${info.project.name}`, position: { x: 3400, y: mobile ? 620 : 230 } } }] },
+    });
+    await page.goto(`/world/demo?node=${start}&zoom=1.5`);
+    await ready(page);
+    await expect(page.locator(`.react-flow__node[data-id="${id}"]`)).toHaveCount(0);
+    await page.locator(`.react-flow__node[data-id="${start}"]`).focus();
+    await page.keyboard.press('ArrowRight');
+    await expect(page.locator('.react-flow__node:focus')).toHaveAttribute('data-id', id);
+    await expect(page.getByRole('complementary', { name: 'Inspector' }).getByLabel('Title')).toHaveValue(`Far beacon ${info.project.name}`);
+  });
+
+  test('arrow keys move between timeline nodes at cluster zoom', async ({ page }) => {
+    await page.goto('/world/demo?view=timeline');
+    await ready(page);
+    await expect.poll(() => page.locator('.react-flow__node').count()).toBeGreaterThan(1);
+    const wc = page.locator('.wc');
+    for (let i = 0; i < 12 && (await wc.getAttribute('data-level')) !== 'cluster'; i++) {
+      await page.locator('.wc-stage .react-flow__pane').click({ position: { x: 10, y: 10 } });
+      await page.keyboard.press('-');
+      await page.waitForTimeout(450);
+    }
+    await expect(wc).toHaveAttribute('data-level', 'cluster');
+    await page.locator('.wc-stage .react-flow__pane').click({ position: { x: 10, y: 10 } });
+    await page.keyboard.press('ArrowRight');
+    const focused = page.locator('.react-flow__node:focus');
+    await expect(focused).toHaveCount(1);
+    expect(await focused.getAttribute('data-id')).toMatch(/^n_/);
+  });
 });

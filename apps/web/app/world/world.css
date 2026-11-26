@@ -160,6 +160,8 @@
 /* Body: activity rail, stage, inspector side by side on desktop */
 .wc-body { position: relative; display: flex; flex: 1; min-height: 0; }
 .wc-stage { --z: 1; position: relative; flex: 1; min-width: 0; min-height: 0; }
+/* Programmatic fallback focus target only (tabindex -1); nodes carry the visible ring. */
+.wc-stage:focus { outline: none; }
 .wc .react-flow { background: var(--wc-bg); }
 .wc.wc-tool-pan .react-flow__pane { cursor: grab; }
 .wc.wc-tool-link .react-flow__node { cursor: crosshair; }
