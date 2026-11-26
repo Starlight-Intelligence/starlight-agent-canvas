@@ -1,8 +1,9 @@
 import WorldCanvas from '@/components/world/WorldCanvas';
+import { parseStressNodes } from '@/lib/world/stress-nodes';
 
 /** 10k generated nodes by default; `?nodes=` overrides, capped at 100k. */
 export default async function StressPage({ searchParams }: { searchParams: Promise<{ nodes?: string }> }) {
   const { nodes } = await searchParams;
-  const n = Math.min(100_000, Math.max(1, Number(nodes) || 10_000));
+  const n = parseStressNodes(nodes);
   return <WorldCanvas worldId="stress" stressNodes={n} />;
 }
