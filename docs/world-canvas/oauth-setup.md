@@ -42,7 +42,7 @@ The Worker is its own OAuth authorization server (`@cloudflare/workers-oauth-pro
 | `ACCESS_JWKS_URL` | secret | Its key endpoint |
 | `MCP_SERVICE_TOKENS`, `MEDIA_SIGNING_KEY` | secrets | Already required before OAuth (see `apps/world-edge/README.md`) |
 
-`wrangler.jsonc` lists all seven secret names under `secrets.required`, so `wrangler deploy` refuses to deploy until every one is set. No `COOKIE_ENCRYPTION_KEY` is needed (the follow-up spec listed it from Cloudflare's older demo): the library's consent and sign-in helpers keep their state in `OAUTH_KV`, bound to the browser by `__Host-` cookies. Verified (code).
+`wrangler.jsonc` lists all seven secret names under `secrets.required`, so `wrangler deploy` refuses to deploy until every one is set, even with OAuth off (`PUBLIC_ORIGIN` set to `""`); with OAuth off the five `ACCESS_*` secrets are never read, so any placeholder value will do. No `COOKIE_ENCRYPTION_KEY` is needed (the follow-up spec listed it from Cloudflare's older demo): the library's consent and sign-in helpers keep their state in `OAUTH_KV`, bound to the browser by `__Host-` cookies. Verified (code).
 
 ## 1. Pick the hostname and route the Worker to it
 
@@ -54,7 +54,7 @@ The Worker is its own OAuth authorization server (`@cloudflare/workers-oauth-pro
    ```
 
    and in `vars`, replace the placeholder: `"PUBLIC_ORIGIN": "https://<host>"`. Until it is replaced, `/mcp` and the OAuth routes answer 500 (`OAUTH_MISCONFIGURED`) on purpose. Verified (code). The `custom_domain` route form is from Cloudflare's docs as quoted in the OAuth library's own guide; verified (docs).
-3. With OAuth on, `/mcp` works only on `<host>`. Tokens are bound to `https://<host>/mcp`, so requests on the `workers.dev` name get 401, service tokens included. Point Claude Code and Codex at `https://<host>/mcp` too. Verified (code).
+3. With OAuth on, `/mcp` works only on `<host>`. Tokens are bound to `https://<host>/mcp`, so requests on the `workers.dev` name get 401, service tokens included. Point Claude Code and Codex at `https://<host>/mcp` too. Verified (code). [connect-agents.md](./connect-agents.md) still shows the `workers.dev` URL in its examples; use `https://<host>/mcp` in its place.
 
 ## 2. Create the OAuth storage (creates a resource)
 
@@ -163,7 +163,7 @@ curl -s https://<host>/.well-known/oauth-authorization-server
 Expected (verified (code) against the test origin):
 
 - `HTTP/2 401` and `www-authenticate: Bearer realm="OAuth", resource_metadata="https://<host>/.well-known/oauth-protected-resource/mcp", scope="world:read world:write"`, plus `error="invalid_token"` when a bad token was sent.
-- Both protected resource documents: `"resource": "https://<host>/mcp"`, `"authorization_servers": ["https://<host>"]`, `"scopes_supported": ["world:read", "world:write"]`.
+- Both protected resource documents: `"resource": "https://<host>/mcp"`, `"authorization_servers": ["https://<host>"]`, `"scopes_supported": ["world:read", "world:write", "world:propose"]`.
 - Authorization server metadata: `"issuer": "https://<host>"` (identical to the `authorization_servers` entry), `authorization_endpoint` `/authorize`, `token_endpoint` `/token`, `registration_endpoint` `/register`, `code_challenge_methods_supported: ["S256"]`, `authorization_response_iss_parameter_supported: true`, `client_id_metadata_document_supported: true`, `token_endpoint_auth_methods_supported` including `none` and `private_key_jwt`, and `scopes_supported` with all three world scopes.
 - `/.well-known/openid-configuration` answers 404. The library serves RFC 8414 metadata only, which MCP accepts.
 
@@ -181,6 +181,7 @@ Verified (docs) as described by OpenAI; the live UI was not checked.
 4. Authentication: **OAuth**.
 5. Read the risk warning, select **I understand and want to continue**, then **Create as a plugin**.
 6. Install the plugin and mention it with `@` in a chat. The first tool call starts the sign-in: our consent page names the client (ChatGPT's metadata document is published by `chatgpt.com`), the redirect host and the permissions. Tick `world:propose` as well if ChatGPT should be able to propose canon; it asks only for read and write by default. Then sign in through Access.
+   Only approve a consent page for a connection you started yourself a moment ago. Anyone can start a ChatGPT or Claude connection to this server in their own account and send you the link; if you approve it and sign in, their connector acts as you.
 7. Run `get_world` for a world, then `add_node`. ChatGPT asks you to confirm the write (tools are annotated `readOnlyHint: false`). The new node's `createdBy.harness` is `chatgpt` and the ops log actor is your Access email. Verified (code) for the Worker side; the ChatGPT side is unverified.
 
 Plans: OpenAI's pages disagree on whether Plus and Pro can add custom MCP servers; Business and Enterprise/Edu can, subject to workspace admin settings. A **Developer mode** toggle may be required depending on the account. Unverified; check your plan and workspace settings.
@@ -211,13 +212,17 @@ With a service token in your environment (never on the command line):
 curl -s -H "Authorization: Bearer $WORLD_CANVAS_TOKEN" "https://<host>/agents/world-agent/<worldId>/log?limit=20"
 ```
 
-Rows written over OAuth show `harness` `chatgpt` or `claude-ai` and your Access email as `actor`. No tool call over OAuth or a service token can set canon status `canon` (acceptance test 7). Verified (code).
+Rows written over OAuth show `harness` `chatgpt` or `claude-ai` and your Access email as `actor`. The actor is the authenticated identity: Access signed that person in. The harness records which client identity the OAuth provider validated (ChatGPT's or Claude's client metadata document, or their redirect URI). It cannot be set through anything a client asserts about itself, but it is attribution for normal use, not a security boundary: ChatGPT and Claude are public OAuth clients, so a person whom Access lets in could complete the flow under their identity in their own browser and use the token from a script. The ops log would still show that person's email. The follow-up spec asks for the actor to be the stable subject; this Worker uses the Access email, matching the browser routes, and keeps the Access `sub` as the grant's user id. No tool call over OAuth or a service token can set canon status `canon` (acceptance test 7). Verified (code).
 
 ## Revoking access
 
-- One person: remove them from the Access app's Allow policy. They cannot sign in again, but tokens already issued stay valid until they expire: access tokens after 1 hour, refresh tokens 30 days after the code exchange (the library's defaults, not changed here). Verified (docs) for the defaults.
+- One person: remove them from the Access app's Allow policy. They cannot sign in again, but tokens already issued stay valid until they expire: access tokens after 1 hour, and the grant (with its refresh tokens) 7 days after the code exchange, however often it is refreshed. Verified (code).
 - Everyone at once: delete and recreate the `OAUTH_KV` namespace (or remove `PUBLIC_ORIGIN` to turn OAuth off). Every client must connect again.
 - A client: remove its redirect URI from `OAUTH_REDIRECT_ALLOWLIST` and deploy. New authorizations stop at once; existing tokens run out as above.
+
+## Abuse limits
+
+`/register` and `/authorize` need no credentials (OAuth requires that), and each call writes to `OAUTH_KV`; a client metadata document URL also makes the Worker fetch it (at most 5 KB, 10 seconds). The Worker has no rate limit of its own. Add a Cloudflare rate limiting rule for `/register`, `/authorize` and `/token` on `<host>` (Security > WAF > Rate limiting rules). Generous limits, such as a few dozen requests per minute per IP, do not affect ChatGPT or Claude. Unverified: the exact limits ChatGPT's and Claude's servers stay within.
 
 ## What is verified and what is not
 
