@@ -371,7 +371,7 @@ describe('verifyRs256Jwt failures are AuthErrors', () => {
     return { fetcher, counter };
   }
 
-  it('concurrent requests share one JWKS fetch, cold or forced by an unknown kid', async () => {
+  it('after a rotation, concurrent tokens with the new kid cause one forced fetch; those inside the window get 401, later ones verify', async () => {
     const known = await signingKey();
     const rotated = await signingKey();
     let published: JsonWebKey[] = [known.jwk];
@@ -380,13 +380,18 @@ describe('verifyRs256Jwt failures are AuthErrors', () => {
     const verify = async (key: typeof known, at: number) =>
       verifyRs256Jwt(await key.sign(claims()), { jwksUrl: JWKS, label: 'Test token', fetcher, now: at });
 
-    // Cold cache: 20 concurrent verifications, one fetch.
-    await Promise.all(Array.from({ length: 20 }, () => verify(known, t0)));
+    await verify(known, t0);
     expect(counter.calls).toBe(1);
-    // Rotation: 20 concurrent tokens with the new kid share one forced fetch, and all verify.
     published = [known.jwk, rotated.jwk];
-    const results = await Promise.all(Array.from({ length: 20 }, () => verify(rotated, t0 + 1000)));
-    expect(results).toHaveLength(20);
+    const results = await Promise.allSettled(Array.from({ length: 20 }, () => verify(rotated, t0 + 1000)));
+    expect(counter.calls).toBe(2);
+    // The request that started the forced fetch verifies; the others are told 401 instead of waiting on it.
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    const rejected = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
+    expect(rejected).toHaveLength(19);
+    expect(rejected.every((r) => r.reason instanceof AuthError && r.reason.status === 401)).toBe(true);
+    // The refetched keys are cached: a retry inside the window verifies without another fetch.
+    await expect(verify(rotated, t0 + 2000)).resolves.toBeTruthy();
     expect(counter.calls).toBe(2);
   });
 
