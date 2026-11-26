@@ -323,11 +323,12 @@ describe('inline Markdown spoofing', () => {
       expect(out.endsWith('…')).toBe(true);
       expect(out.length).toBeLessThan(INLINE_TEXT_MAX * 2 + 10);
     }
-    const ref = `a:${'a'.repeat(100_000)}`;
+    // canon.ref must be an http(s) URL (world-model schema), so the huge ref is one.
+    const ref = `https://e.x/${'a'.repeat(100_000)}`;
     const started = performance.now();
     const built = buildCanonProposal(request({ nodeIds: ['n_orchard'] }), [node('n_orchard', { canon: { status: 'draft', ref } })], { now: clock });
     expect(performance.now() - started).toBeLessThan(100);
-    expect(built.markdown).toContain('(ref: a:aaa');
+    expect(built.markdown).toMatch(/\(ref: [^)]*e\.x[^)]*aaa/);
     expect(built.markdown).not.toContain(ref);
   });
 
