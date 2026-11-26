@@ -27,8 +27,17 @@ import { notFound, routeAuthenticated } from './router.js';
  * never read on this path.
  */
 
-/** Scopes any access needs: named in the 401 challenge and the protected resource metadata. */
+/** Scopes any access needs: named in the 401 challenge. */
 export const REQUIRED_SCOPES = ['world:read', 'world:write'];
+
+/** Access token lifetime: 1 hour. */
+export const ACCESS_TOKEN_TTL_SECONDS = 60 * 60;
+/**
+ * Grant (refresh token) lifetime: 7 days from sign-in, fixed, not extended by
+ * refreshing. Access is consulted only at sign-in, so this bounds how long
+ * someone removed from the Access policy keeps access.
+ */
+export const REFRESH_TOKEN_TTL_SECONDS = 7 * 24 * 60 * 60;
 
 const OAUTH_PATHS = new Set([
   '/authorize',
@@ -176,6 +185,8 @@ function buildProvider(origin: string, publicHost: string, allowlist: RedirectAl
     tokenEndpoint: `${origin}/token`,
     clientRegistrationEndpoint: `${origin}/register`,
     clientIdMetadataDocumentEnabled: true,
+    accessTokenTTL: ACCESS_TOKEN_TTL_SECONDS,
+    refreshTokenTTL: REFRESH_TOKEN_TTL_SECONDS,
     scopesSupported: [...WORLD_SCOPES],
     requiredScopes: REQUIRED_SCOPES,
     resourceMetadata: {
@@ -196,16 +207,27 @@ function buildProvider(origin: string, publicHost: string, allowlist: RedirectAl
   });
 }
 
+async function withAllScopes(response: Response): Promise<Response> {
+  const document = (await response.json()) as Record<string, unknown>;
+  const headers = new Headers(response.headers);
+  headers.delete('content-length');
+  return new Response(JSON.stringify({ ...document, scopes_supported: [...WORLD_SCOPES] }), { status: 200, headers });
+}
+
 const UNAUTHENTICATED_BODY = JSON.stringify({ error: { code: 'UNAUTHENTICATED', message: 'Authentication required.' } });
 
 /**
- * Serve one request with OAuth on. Two adjustments to the provider's own
- * responses, both small and deliberate:
+ * Serve one request with OAuth on. Three adjustments to the provider's own
+ * responses, all small and deliberate:
  *   1. `/.well-known/oauth-protected-resource` (no path) is answered with the
  *      provider's document for `/.well-known/oauth-protected-resource/mcp`.
  *      The provider serves only the path-specific URL; the follow-up spec (R2)
  *      also wants the root location for clients that look there.
- *   2. A 401 on /mcp keeps the provider's status and WWW-Authenticate header
+ *   2. In that protected resource metadata, at both locations,
+ *      `scopes_supported` lists all three scopes (R2). The provider fills it
+ *      from requiredScopes, which must stay read and write so the 401
+ *      challenge names only the baseline. Every other field is untouched.
+ *   3. A 401 on /mcp keeps the provider's status and WWW-Authenticate header
  *      (resource_metadata, scope, error) but carries this Worker's JSON body,
  *      `{error: {code: "UNAUTHENTICATED", message}}`, which the world-agents
  *      client and existing tests rely on.
@@ -219,6 +241,8 @@ export async function fetchWithOAuth(provider: OAuthProvider<Env>, request: Requ
     target = new Request(alias, request);
   }
   const response = await provider.fetch(target, env, ctx);
+  const isPrm = url.pathname === PRM_PATH || url.pathname === `${PRM_PATH}${MCP_ROUTE}`;
+  if (isPrm && response.status === 200 && request.method === 'GET') return withAllScopes(response);
   if (isMcpPath(url.pathname) && response.status === 401) {
     const headers = new Headers(response.headers);
     headers.set('content-type', 'application/json');

@@ -86,6 +86,14 @@ async function authorizeGet(request: Request, oauth: OAuthHelpers, c: AuthorizeC
   }
   if (!isRedirectAllowed(authRequest.redirectUri, c.allowlist)) return errorPage(NOT_ALLOWED);
 
+  // PKCE with S256 for every client. The library already demands it from
+  // public clients and refuses "plain"; this extends it to confidential DCR
+  // clients (OAuth 2.1). authRequest was validated by the library and its
+  // redirect URI passed the allowlist, so the error may go back to the client.
+  if (!authRequest.codeChallenge || authRequest.codeChallengeMethod !== 'S256') {
+    return redirect(authorizationErrorRedirect(authRequest, 'invalid_request', 'PKCE with code_challenge_method=S256 is required.'));
+  }
+
   try {
     // describeConsent first: a failed client lookup leaves nothing in KV.
     const details = await oauth.describeConsent(authRequest);
@@ -209,7 +217,13 @@ export async function handleCallback(request: Request, env: Env, c: AuthorizeCon
       props,
     }));
   } catch (error) {
-    return helperErrorPage(error, headers);
+    // completeAuthorization looks the client up again and re-validates the
+    // redirect URI, so it can fail if the client was deleted or its metadata
+    // document changed since consent. Any failure here ends on a local page
+    // that still clears the sign-in cookie; nothing is issued.
+    if (error instanceof AuthorizationError || error instanceof CimdFetchError) return helperErrorPage(error, headers);
+    console.error('world-edge: completeAuthorization failed:', error instanceof Error ? error.message : String(error));
+    return errorPage('This authorization can no longer be completed. Start again from your app.', 400, headers);
   }
   return redirect(redirectTo, headers);
 }

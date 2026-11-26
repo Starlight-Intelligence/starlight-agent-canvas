@@ -103,20 +103,26 @@ Canon is never written here. `applyOps` refuses `canon` in any op, `importGraph`
 
 OAuth is on only when `PUBLIC_ORIGIN` and `OAUTH_KV` are both set. With `PUBLIC_ORIGIN` unset or empty, the OAuth routes answer 404 and `/mcp` takes service tokens only, as before. A `PUBLIC_ORIGIN` that is set but is not exactly an origin makes `/mcp` and the OAuth routes answer 500 (`OAUTH_MISCONFIGURED`); the placeholder value does that on purpose.
 
+Because of `secrets.required`, the five `ACCESS_*` secrets must exist before `wrangler deploy` succeeds, even with OAuth off. With OAuth off any placeholder value works: the Worker reads them only in `/authorize` and `/callback`, which exist only with OAuth on.
+
+Token lifetimes: an access token lasts 1 hour (`accessTokenTTL` 3600). A grant, and so its refresh tokens, ends 7 days after sign-in (`refreshTokenTTL` 604800); refreshing does not extend it. Access is consulted only at sign-in, so someone removed from the Access policy keeps access for at most 7 days. To cut that short, revoke their grants (the provider's `listUserGrants` and `revokeGrant` helpers; there is no admin route yet). Authorization codes, consent pages and sign-in transactions expire after 10 minutes. Dynamically registered clients expire after 90 days unless used.
+
 With OAuth on, `/mcp` works only at `PUBLIC_ORIGIN`: every token, service tokens included, is bound to the resource `<PUBLIC_ORIGIN>/mcp`, and a request on another host (such as the `workers.dev` name) gets 401. Point Claude Code and Codex at the same URL.
 
-`OAUTH_REDIRECT_ALLOWLIST` entries are separated by spaces or commas. Each is an exact https URI, an https prefix ending in `/*` that matches only deeper path segments on that exact host (no port, query, fragment or userinfo), or the word `loopback`, which allows `http://localhost[:port]/callback` and `http://127.0.0.1[:port]/callback`, optionally with one more `/<callback_id>` segment. The default allows ChatGPT (`https://chatgpt.com/connector_platform_oauth_redirect`, `https://chatgpt.com/connector/oauth/*`) and claude.ai (`https://claude.ai/api/mcp/auth_callback`). Add `loopback` only if Claude Code or Codex users should sign in with OAuth instead of a service token. An empty list authorizes nothing. The list is checked when a client registers (`/register` refuses any redirect URI not on it), on `/authorize`, and again at `/callback` before a code is issued.
+`OAUTH_REDIRECT_ALLOWLIST` entries are separated by spaces or commas. Each is an exact https URI, an https prefix ending in `/*` that matches only deeper path segments on that exact host (no port, query, fragment or userinfo), or the word `loopback`, which allows `http://localhost[:port]/callback` and `http://127.0.0.1[:port]/callback`, optionally with one more `/<callback_id>` segment. A redirect URI containing `?` or `#` anywhere never matches. The default allows ChatGPT (`https://chatgpt.com/connector_platform_oauth_redirect`, `https://chatgpt.com/connector/oauth/*`) and claude.ai (`https://claude.ai/api/mcp/auth_callback`). Add `loopback` only if Claude Code or Codex users should sign in with OAuth instead of a service token. An empty list authorizes nothing. The list is checked when a client registers (`/register` refuses any redirect URI not on it), on `/authorize`, when consent is approved, and again at `/callback` before a code is issued.
+
+Every client must use PKCE with `S256`, confidential DCR clients included. A request without it, or with `plain`, goes back to the client as `error=invalid_request` (with `state` and `iss`).
 
 ## Routes
 
 | Route | Auth | Notes |
 | --- | --- | --- |
 | `GET /health` | none | liveness |
-| `POST /mcp` | OAuth access token or bearer service token | MCP (stateless Streamable HTTP, Agents SDK `createMcpHandler`). 401 carries `WWW-Authenticate: Bearer resource_metadata="<PUBLIC_ORIGIN>/.well-known/oauth-protected-resource/mcp", scope="world:read world:write"`. With OAuth off: bearer service token only |
-| `GET /.well-known/oauth-protected-resource/mcp` | none | RFC 9728 metadata: `resource`, `authorization_servers`, `scopes_supported` (`world:read`, `world:write`) |
+| `POST /mcp` | OAuth access token or bearer service token | MCP (stateless Streamable HTTP, Agents SDK `createMcpHandler`). 401 carries `WWW-Authenticate: Bearer realm="OAuth", resource_metadata="<PUBLIC_ORIGIN>/.well-known/oauth-protected-resource/mcp", scope="world:read world:write"` (plus `error="invalid_token"` for a bad token). With OAuth off: bearer service token only |
+| `GET /.well-known/oauth-protected-resource/mcp` | none | RFC 9728 metadata: `resource`, `authorization_servers`, `scopes_supported` (all three scopes) |
 | `GET /.well-known/oauth-protected-resource` | none | the same document |
 | `GET /.well-known/oauth-authorization-server` | none | RFC 8414 metadata (issuer = `PUBLIC_ORIGIN`, S256 only, `iss` in responses, CIMD supported) |
-| `GET /authorize` | none (the consent page is the gate) | validates the client and redirect, then shows the consent page |
+| `GET /authorize` | none (the consent page is the gate) | validates the client, redirect and PKCE (S256), then shows the consent page. Pre-ticked scopes: the ones the client asked for, or only `world:read` if it asked for none of ours |
 | `POST /authorize` | consent form, bound to the browser by a cookie | Allow: redirect to Access for SaaS sign-in. Deny: back to the client with `error=access_denied` |
 | `GET /callback` | Access sign-in result, bound to the browser | checks the Access id_token, then back to the client with `code`, `state`, `iss` |
 | `POST /token` | OAuth client (PKCE) | authorization code and refresh token grants, revocation |
@@ -155,7 +161,9 @@ Each tool needs one OAuth scope. The OAuth library advertises scopes but does no
 
 ### Who an OAuth caller is
 
-The actor is the email from the Access id_token. The harness comes from the client identity the provider validated, computed when the code is issued, never from `client_name` or tool arguments (`src/harness.ts`):
+The actor is the email from the Access id_token, the same as on the browser path. The Access `sub` is the grant's user id (and is kept in the grant), but it is not written to the ops log. That is a deliberate deviation from the follow-up spec's R1.4, which asks for the actor "from the user's stable subject": an email is what the browser path already records, and it is readable in the log. The cost is that the log cannot follow a person whose email changes.
+
+The harness records which client identity the provider validated: the client metadata document URL (`client_id`) or the allowlisted redirect URI, computed when the code is issued (`src/harness.ts`). It cannot be set through self-asserted fields (`client_name`, tool arguments, headers). It is attribution for normal use, not a security boundary. ChatGPT and claude.ai are public clients, so anyone who may sign in through Access can register a client with their redirect URI (or present their published `client_id`), finish the flow in their own browser, read the code from the redirect and redeem it with their own PKCE verifier, and get a token labelled `chatgpt` or `claude-ai`. The authenticated identity is the actor, the Access email.
 
 | Client | Harness |
 | --- | --- |
@@ -187,7 +195,7 @@ pnpm --filter @starlight-agent-canvas/world-edge exec wrangler dev --var PUBLIC_
 # then: Authorization: Bearer $TOKEN against http://localhost:8787/mcp
 ```
 
-`--var PUBLIC_ORIGIN:` sets `PUBLIC_ORIGIN` to the empty string, which turns OAuth off locally; without it the placeholder in `wrangler.jsonc` makes `/mcp` answer 500. Because `wrangler.jsonc` lists `secrets.required`, `wrangler dev` reads only those names from `.dev.vars` and warns about the Access secrets you did not set. To try OAuth locally, pass `--var PUBLIC_ORIGIN:http://localhost:8787` and put the five `ACCESS_*` values of an Access for SaaS app whose redirect URL is `http://localhost:8787/callback` in `.dev.vars`.
+`--var PUBLIC_ORIGIN:` sets `PUBLIC_ORIGIN` to the empty string, which turns OAuth off locally; without it the placeholder in `wrangler.jsonc` makes `/mcp` answer 500. The same applies to `pnpm world-edge:dev`: run it as `pnpm world-edge:dev --var PUBLIC_ORIGIN:` (or with a real origin); the extra arguments reach `wrangler dev`. Because `wrangler.jsonc` lists `secrets.required`, `wrangler dev` reads only those names from `.dev.vars` and warns about the Access secrets you did not set. To try OAuth locally, pass `--var PUBLIC_ORIGIN:http://localhost:8787` and put the five `ACCESS_*` values of an Access for SaaS app whose redirect URL is `http://localhost:8787/callback` in `.dev.vars`.
 
 Locally, Workers AI and Vectorize are not emulated, so search uses D1 (or the DO) text matching.
 
@@ -275,7 +283,8 @@ Keep each client's token in an environment variable (`WORLD_CANVAS_TOKEN`) and o
 - PR flow for canon proposals (rows wait in `canon_proposals` with `status = 'open'`).
 - No live OAuth test yet: the flows are tested against a mocked Access for SaaS app and mocked client metadata documents. Still to confirm against the real services: Access's token endpoint client authentication (the Worker sends `client_secret_post`), the literal `iss`, `aud` and `nonce` of a real Access id_token, and that ChatGPT and claude.ai complete the flow.
 - No `/.well-known/openid-configuration`; the OAuth library serves RFC 8414 metadata only, which MCP accepts.
-- The protected resource metadata lists `world:read` and `world:write` as `scopes_supported` (the scopes any access needs, which the library also puts in the 401 challenge). `world:propose` is listed in the authorization server metadata and offered on the consent page.
+- The protected resource metadata lists all three scopes, but the OAuth library fills `scopes_supported` from the scopes it names in the 401 challenge (read and write). The Worker rewrites that one field of the library's document at both metadata locations (`src/oauth.ts`, `fetchWithOAuth`); the challenge keeps `scope="world:read world:write"`.
+- No rate limiting on `/register`, `/authorize` or `/token`; both write to KV for anonymous callers. Add a Cloudflare rate-limiting rule before exposing this widely.
 - No "remember this approval"; the consent page shows on every authorization.
 - No scheduled `purgeExpiredData()` sweep; KV expirations remove expired records.
 - Region ops (v1 spec has none) and imports into non-empty worlds.

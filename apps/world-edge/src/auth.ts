@@ -102,9 +102,14 @@ interface Jwk extends JsonWebKey {
   kid?: string;
 }
 
-/** One cache entry per JWKS URL, so the two Access key sets never evict each other. */
-const jwksCache = new Map<string, { keys: Jwk[]; fetchedAt: number }>();
+/**
+ * One cache entry per JWKS URL, so the two Access key sets never evict each
+ * other. `forcedAt` is when an unknown kid last forced a refetch.
+ */
+const jwksCache = new Map<string, { keys: Jwk[]; fetchedAt: number; forcedAt: number }>();
 const JWKS_TTL_MS = 10 * 60 * 1000;
+/** At most one refetch per JWKS URL in this window because of an unknown kid. */
+const JWKS_FORCED_REFRESH_MS = 30 * 1000;
 
 export type JwksFetcher = (url: string) => Promise<{ keys: Jwk[] }>;
 
@@ -123,7 +128,9 @@ function base64UrlDecode(value: string): Uint8Array {
 }
 
 function decodeJson(segment: string): Record<string, unknown> {
-  return JSON.parse(new TextDecoder().decode(base64UrlDecode(segment))) as Record<string, unknown>;
+  const value: unknown = JSON.parse(new TextDecoder().decode(base64UrlDecode(segment)));
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new SyntaxError('JWT segment is not a JSON object.');
+  return value as Record<string, unknown>;
 }
 
 export function normalizeTeamDomain(domain: string): string {
@@ -133,14 +140,38 @@ export function normalizeTeamDomain(domain: string): string {
   return url.origin;
 }
 
-async function loadKeys(url: string, fetcher: JwksFetcher, forceRefresh: boolean): Promise<Jwk[]> {
-  const now = Date.now();
+async function fetchKeys(url: string, fetcher: JwksFetcher): Promise<Jwk[]> {
+  let result: { keys: Jwk[] };
+  try {
+    result = await fetcher(url);
+  } catch (error) {
+    if (error instanceof AuthError) throw error;
+    // Network failure or a body that is not JSON: the keys are unavailable, not the token bad.
+    throw new AuthError('Could not load Access signing keys.', 503);
+  }
+  return Array.isArray(result?.keys) ? result.keys : [];
+}
+
+/** Cached keys for `url`, fetched when missing or older than the TTL. */
+async function loadKeys(url: string, fetcher: JwksFetcher, now: number): Promise<Jwk[]> {
   const cached = jwksCache.get(url);
-  if (!forceRefresh && cached && now - cached.fetchedAt < JWKS_TTL_MS) return cached.keys;
-  const { keys } = await fetcher(url);
-  const entry = { keys: Array.isArray(keys) ? keys : [], fetchedAt: now };
-  jwksCache.set(url, entry);
-  return entry.keys;
+  if (cached && now - cached.fetchedAt < JWKS_TTL_MS) return cached.keys;
+  const keys = await fetchKeys(url, fetcher);
+  jwksCache.set(url, { keys, fetchedAt: now, forcedAt: cached?.forcedAt ?? 0 });
+  return keys;
+}
+
+/**
+ * Refetch because a token named a kid the cache does not have (key rotation).
+ * Rate limited per URL, so tokens with made-up kids cannot make every request
+ * refetch. Returns null when a forced refetch happened too recently.
+ */
+async function refreshKeysForUnknownKid(url: string, fetcher: JwksFetcher, now: number): Promise<Jwk[] | null> {
+  const cached = jwksCache.get(url);
+  if (cached && now - cached.forcedAt < JWKS_FORCED_REFRESH_MS) return null;
+  const keys = await fetchKeys(url, fetcher);
+  jwksCache.set(url, { keys, fetchedAt: now, forcedAt: now });
+  return keys;
 }
 
 /** Test hook. */
@@ -160,11 +191,12 @@ export interface Rs256JwtOptions {
 }
 
 /**
- * Verify an RS256 JWT: header alg, key by kid from the JWKS (cached, refreshed
- * once on an unknown kid), signature, exp (required) and nbf with 60 s skew.
- * Returns the payload. Issuer, audience and every other claim are the
- * caller's to check. Throws AuthError (status 401, or 503 when the keys
- * cannot be loaded).
+ * Verify an RS256 JWT: header alg, key by kid from the JWKS (cached, refetched
+ * on an unknown kid at most once per 30 s per URL), signature, exp (required)
+ * and nbf with 60 s skew. Returns the payload. Issuer, audience and every other
+ * claim are the caller's to check. Every failure is an AuthError: 503 when the
+ * keys cannot be loaded, 401 for anything about the token or the key (bad
+ * base64, a key WebCrypto refuses for RS256 verification, a bad signature).
  */
 export async function verifyRs256Jwt(token: string, options: Rs256JwtOptions): Promise<Record<string, unknown>> {
   const { label } = options;
@@ -182,25 +214,32 @@ export async function verifyRs256Jwt(token: string, options: Rs256JwtOptions): P
   if (options.requireKid && typeof header.kid !== 'string') throw new AuthError(`${label} has no key id.`);
 
   const fetcher = options.fetcher ?? defaultFetcher;
-  let keys = await loadKeys(options.jwksUrl, fetcher, false);
+  const nowMs = options.now ?? Date.now();
+  const keys = await loadKeys(options.jwksUrl, fetcher, nowMs);
   let jwk = keys.find((key) => key.kid === header.kid);
   if (!jwk) {
-    // Key rotation: refresh once.
-    keys = await loadKeys(options.jwksUrl, fetcher, true);
-    jwk = keys.find((key) => key.kid === header.kid);
+    // Key rotation: refetch, rate limited.
+    const refreshed = await refreshKeysForUnknownKid(options.jwksUrl, fetcher, nowMs);
+    jwk = refreshed?.find((key) => key.kid === header.kid);
   }
   if (!jwk) throw new AuthError(`${label} signed by an unknown key.`);
 
-  const key = await crypto.subtle.importKey('jwk', jwk, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['verify']);
-  const valid = await crypto.subtle.verify(
-    'RSASSA-PKCS1-v1_5',
-    key,
-    base64UrlDecode(parts[2]!),
-    encoder.encode(`${parts[0]}.${parts[1]}`),
-  );
+  let valid: boolean;
+  try {
+    const key = await crypto.subtle.importKey('jwk', jwk, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['verify']);
+    valid = await crypto.subtle.verify(
+      'RSASSA-PKCS1-v1_5',
+      key,
+      base64UrlDecode(parts[2]!),
+      encoder.encode(`${parts[0]}.${parts[1]}`),
+    );
+  } catch {
+    // Signature segment is not base64url, or the key is not an RS256 verification key.
+    throw new AuthError(`${label} could not be verified.`);
+  }
   if (!valid) throw new AuthError(`${label} signature is invalid.`);
 
-  const nowSec = Math.floor((options.now ?? Date.now()) / 1000);
+  const nowSec = Math.floor(nowMs / 1000);
   const skew = 60;
   if (typeof payload.exp !== 'number' || payload.exp + skew < nowSec) throw new AuthError(`${label} expired.`);
   if (typeof payload.nbf === 'number' && payload.nbf - skew > nowSec) throw new AuthError(`${label} not yet valid.`);

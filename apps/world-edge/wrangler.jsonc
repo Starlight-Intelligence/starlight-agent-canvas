@@ -66,7 +66,9 @@
     // (https, no path, no trailing slash). It becomes the OAuth issuer, and the
     // MCP resource is <PUBLIC_ORIGIN>/mcp. The placeholder is not a URL on
     // purpose: until it is set, /mcp and the OAuth routes answer 500 instead of
-    // running with a wrong origin. Set it to "" to turn OAuth off (bearer-only /mcp).
+    // running with a wrong origin. Set it to "" to turn OAuth off (bearer-only
+    // /mcp); the ACCESS_* secrets below must still exist for deploy, but any
+    // placeholder value works then because only the OAuth routes read them.
     "PUBLIC_ORIGIN": "REPLACE_WITH_PUBLIC_ORIGIN",
     // Redirect URIs that may receive an authorization code. Whitespace or comma
     // separated: exact https URIs, https prefixes ending in /* (deeper path

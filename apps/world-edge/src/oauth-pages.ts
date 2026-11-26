@@ -42,12 +42,12 @@ function htmlHeaders(base?: Headers): Headers {
 
 /**
  * Scopes the page offers: all three, ticked when the client asked for them.
- * A client that asked for none of ours gets the baseline (read and write)
- * ticked, matching the scope in the 401 challenge.
+ * A client that asked for none of ours gets only world:read ticked; the user
+ * can tick more.
  */
 export function defaultTickedScopes(requested: readonly string[]): WorldScope[] {
   const ours = WORLD_SCOPES.filter((scope) => requested.includes(scope));
-  return ours.length > 0 ? ours : ['world:read', 'world:write'];
+  return ours.length > 0 ? ours : ['world:read'];
 }
 
 export function consentPage(details: ConsentDescription, handle: string, baseHeaders: Headers): Response {

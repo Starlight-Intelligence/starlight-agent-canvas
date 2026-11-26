@@ -17,6 +17,8 @@
  *     http://localhost[:port]/callback and http://127.0.0.1[:port]/callback,
  *     optionally with one more /<callback_id> segment.
  *
+ * Neither an entry nor a candidate may contain "?" or "#" at all.
+ *
  * An entry that is none of these is ignored (it can never match) and logged.
  * An unset or empty list allows nothing.
  */
@@ -35,6 +37,9 @@ const SEGMENT = /^[A-Za-z0-9._~-]+$/;
  * percent-encoded dots) can make two spellings compare differently.
  */
 function canonicalUrl(value: string): URL | null {
+  // An empty query or fragment ("...?" or "...#") parses to an empty
+  // search/hash, so refuse the characters themselves.
+  if (value.includes('?') || value.includes('#')) return null;
   let url: URL;
   try {
     url = new URL(value);
