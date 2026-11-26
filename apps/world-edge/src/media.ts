@@ -16,6 +16,9 @@ export const MEDIA_CONTENT_TYPES = [
   'text/plain',
 ] as const;
 
+/** The only object keys this Worker writes or serves. */
+export const MEDIA_KEY_PATTERN = /^worlds\/[A-Za-z0-9_-]+\/media\/[a-z0-9.-]+$/;
+
 export const MEDIA_MAX_BYTES = 50 * 1024 * 1024;
 export const UPLOAD_TTL_SECONDS = 15 * 60;
 
@@ -81,7 +84,7 @@ export async function receiveUpload(request: Request, env: Env, now = Date.now()
   const ct = p.get('ct') ?? '';
   const by = p.get('by') ?? '';
   const sig = p.get('sig') ?? '';
-  if (!/^worlds\/[A-Za-z0-9_-]+\/media\/[a-z0-9.-]+$/.test(key) || !Number.isFinite(exp) || !by || !/^[0-9a-f]{64}$/.test(sig)) {
+  if (!MEDIA_KEY_PATTERN.test(key) || !Number.isFinite(exp) || !by || !/^[0-9a-f]{64}$/.test(sig)) {
     return json({ error: { code: 'BAD_SIGNATURE', message: 'Malformed upload URL.' } }, 403);
   }
   if (exp < Math.floor(now / 1000)) return json({ error: { code: 'EXPIRED', message: 'Upload URL expired.' } }, 403);
@@ -109,8 +112,14 @@ export async function receiveUpload(request: Request, env: Env, now = Date.now()
 /** GET /media/object/<key> (authenticated). */
 export async function readMedia(request: Request, env: Env): Promise<Response> {
   if (!env.WORLD_MEDIA) return json({ error: { code: 'MEDIA_DISABLED', message: 'WORLD_MEDIA is not configured.' } }, 503);
-  const key = decodeURIComponent(new URL(request.url).pathname.slice('/media/object/'.length));
-  if (!key.startsWith('worlds/') || key.includes('..')) return json({ error: { code: 'NOT_FOUND', message: 'Not found.' } }, 404);
+  let key: string;
+  try {
+    key = decodeURIComponent(new URL(request.url).pathname.slice('/media/object/'.length));
+  } catch {
+    return json({ error: { code: 'BAD_REQUEST', message: 'Malformed percent-encoding in media key.' } }, 400);
+  }
+  // Only keys signUpload can mint: worlds/<worldId>/media/<file>.
+  if (!MEDIA_KEY_PATTERN.test(key) || key.includes('..')) return json({ error: { code: 'NOT_FOUND', message: 'Not found.' } }, 404);
   const object = await env.WORLD_MEDIA.get(key);
   if (!object) return json({ error: { code: 'NOT_FOUND', message: 'Not found.' } }, 404);
   const headers = new Headers();

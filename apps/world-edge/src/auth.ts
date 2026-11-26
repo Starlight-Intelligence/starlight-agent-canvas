@@ -12,6 +12,17 @@ export interface Principal {
   /** Stable id: Access email/sub, or the service token name. */
   actor: string;
   via: 'access' | 'service-token';
+  /**
+   * Epoch ms after which this credential is no longer valid (Access `exp`).
+   * Long-lived connections (WebSockets) must stop serving the principal then.
+   */
+  expiresAt?: number;
+  /**
+   * SHA-256 of the presented service token. Lets a long-lived connection
+   * re-check that the token is still listed in MCP_SERVICE_TOKENS (revocation).
+   * The hash never leaves the Worker and its Durable Objects.
+   */
+  tokenSha256?: string;
 }
 
 /** Internal header the Worker sets after auth, before forwarding to the Durable Object. */
@@ -46,21 +57,47 @@ function timingSafeEqualHex(a: string, b: string): boolean {
   return diff === 0;
 }
 
-export async function verifyServiceToken(token: string, env: Pick<Env, 'MCP_SERVICE_TOKENS'>): Promise<Principal | null> {
-  if (!env.MCP_SERVICE_TOKENS || token.length < 16 || token.length > 512) return null;
-  let entries: z.infer<typeof serviceTokensSchema>;
+function parseServiceTokens(env: Pick<Env, 'MCP_SERVICE_TOKENS'>): z.infer<typeof serviceTokensSchema> | null {
+  if (!env.MCP_SERVICE_TOKENS) return null;
   try {
-    entries = serviceTokensSchema.parse(JSON.parse(env.MCP_SERVICE_TOKENS));
+    return serviceTokensSchema.parse(JSON.parse(env.MCP_SERVICE_TOKENS));
   } catch {
     // Misconfigured secret: fail closed. Do not echo the secret.
     return null;
   }
-  const presented = await sha256Hex(token);
+}
+
+function matchTokenHash(presented: string, entries: z.infer<typeof serviceTokensSchema>) {
   let match: (typeof entries)[number] | null = null;
   for (const entry of entries) {
     if (timingSafeEqualHex(presented, entry.sha256)) match = entry;
   }
-  return match ? { harness: match.harness, actor: match.name, via: 'service-token' } : null;
+  return match;
+}
+
+export async function verifyServiceToken(token: string, env: Pick<Env, 'MCP_SERVICE_TOKENS'>): Promise<Principal | null> {
+  if (token.length < 16 || token.length > 512) return null;
+  const entries = parseServiceTokens(env);
+  if (!entries) return null;
+  const presented = await sha256Hex(token);
+  const match = matchTokenHash(presented, entries);
+  return match ? { harness: match.harness, actor: match.name, via: 'service-token', tokenSha256: presented } : null;
+}
+
+/**
+ * Is `principal` still authorized right now? Access principals expire with
+ * their assertion; service-token principals must still be listed, under the
+ * same name and harness, in the current MCP_SERVICE_TOKENS.
+ */
+export function principalStillValid(principal: Principal, env: Pick<Env, 'MCP_SERVICE_TOKENS'>, now = Date.now()): boolean {
+  if (principal.expiresAt !== undefined && now >= principal.expiresAt) return false;
+  if (principal.via === 'service-token') {
+    if (!principal.tokenSha256) return false;
+    const entries = parseServiceTokens(env);
+    const match = entries ? matchTokenHash(principal.tokenSha256, entries) : null;
+    return Boolean(match && match.name === principal.actor && match.harness === principal.harness);
+  }
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -72,8 +109,23 @@ interface Jwk extends JsonWebKey {
   kid?: string;
 }
 
-let jwksCache: { url: string; keys: Jwk[]; fetchedAt: number } | null = null;
-const JWKS_TTL_MS = 10 * 60 * 1000;
+interface JwksCache {
+  url: string;
+  keys: Jwk[];
+  /** When the current keys were fetched (TTL base). */
+  fetchedAt: number;
+  /** Last fetch of any kind; an unknown kid cannot force another one within the interval. */
+  lastFetchAt: number;
+  /** kid -> epoch ms until which it is known not to exist. */
+  unknownKids: Map<string, number>;
+}
+
+let jwksCache: JwksCache | null = null;
+let jwksInFlight: Promise<Jwk[]> | null = null;
+export const JWKS_TTL_MS = 10 * 60 * 1000;
+/** An unknown kid can trigger a refetch at most once per this interval, Worker-isolate wide. */
+export const JWKS_UNKNOWN_KID_REFETCH_MS = 60 * 1000;
+const MAX_NEGATIVE_KIDS = 1024;
 
 export type JwksFetcher = (url: string) => Promise<{ keys: Jwk[] }>;
 
@@ -102,18 +154,71 @@ export function normalizeTeamDomain(domain: string): string {
   return url.origin;
 }
 
-async function loadKeys(teamDomain: string, fetcher: JwksFetcher, forceRefresh: boolean): Promise<Jwk[]> {
+async function fetchKeys(url: string, fetcher: JwksFetcher, now: number): Promise<Jwk[]> {
+  // Concurrent misses share one fetch.
+  if (!jwksInFlight) {
+    jwksInFlight = (async () => {
+      try {
+        const { keys } = await fetcher(url);
+        jwksCache = {
+          url,
+          keys: Array.isArray(keys) ? keys : [],
+          fetchedAt: now,
+          // Any fetch is as fresh as a forced one.
+          lastFetchAt: now,
+          unknownKids: new Map(),
+        };
+        return jwksCache.keys;
+      } finally {
+        jwksInFlight = null;
+      }
+    })();
+  }
+  return jwksInFlight;
+}
+
+/**
+ * Resolve the signing key for `kid`. Keys are cached for JWKS_TTL_MS. An
+ * unknown kid forces a refetch at most once per JWKS_UNKNOWN_KID_REFETCH_MS,
+ * and a kid still unknown after a refetch is negative-cached for that
+ * interval, so unverified tokens with random kids cannot drive a fetch per
+ * request.
+ */
+async function keyFor(teamDomain: string, kid: unknown, fetcher: JwksFetcher, now: number): Promise<Jwk | null> {
   const url = `${teamDomain}/cdn-cgi/access/certs`;
-  const now = Date.now();
-  if (!forceRefresh && jwksCache && jwksCache.url === url && now - jwksCache.fetchedAt < JWKS_TTL_MS) return jwksCache.keys;
-  const { keys } = await fetcher(url);
-  jwksCache = { url, keys: Array.isArray(keys) ? keys : [], fetchedAt: now };
-  return jwksCache.keys;
+  const kidKey = typeof kid === 'string' ? kid : '';
+  let cache = jwksCache?.url === url ? jwksCache : null;
+  if (!cache || now - cache.fetchedAt >= JWKS_TTL_MS) {
+    await fetchKeys(url, fetcher, now);
+    cache = jwksCache!;
+  }
+  const found = cache.keys.find((key) => key.kid === kid);
+  if (found) return found;
+
+  const negativeUntil = cache.unknownKids.get(kidKey);
+  if (negativeUntil !== undefined && now < negativeUntil) return null;
+  if (now - cache.lastFetchAt < JWKS_UNKNOWN_KID_REFETCH_MS) {
+    rememberUnknown(cache, kidKey, cache.lastFetchAt + JWKS_UNKNOWN_KID_REFETCH_MS);
+    return null;
+  }
+  // Key rotation: refetch once for this interval.
+  await fetchKeys(url, fetcher, now);
+  cache = jwksCache!;
+  const rotated = cache.keys.find((key) => key.kid === kid);
+  if (rotated) return rotated;
+  rememberUnknown(cache, kidKey, now + JWKS_UNKNOWN_KID_REFETCH_MS);
+  return null;
+}
+
+function rememberUnknown(cache: JwksCache, kid: string, until: number): void {
+  if (cache.unknownKids.size >= MAX_NEGATIVE_KIDS) cache.unknownKids.clear();
+  cache.unknownKids.set(kid, until);
 }
 
 /** Test hook. */
 export function resetJwksCache(): void {
   jwksCache = null;
+  jwksInFlight = null;
 }
 
 export async function verifyAccessJwt(
@@ -138,13 +243,7 @@ export async function verifyAccessJwt(
   if (header.alg !== 'RS256') throw new AuthError('Unsupported Access token algorithm.');
 
   const fetcher = options.fetcher ?? defaultFetcher;
-  let keys = await loadKeys(teamDomain, fetcher, false);
-  let jwk = keys.find((key) => key.kid === header.kid);
-  if (!jwk) {
-    // Key rotation: refresh once.
-    keys = await loadKeys(teamDomain, fetcher, true);
-    jwk = keys.find((key) => key.kid === header.kid);
-  }
+  const jwk = await keyFor(teamDomain, header.kid, fetcher, options.now ?? Date.now());
   if (!jwk) throw new AuthError('Access token signed by an unknown key.');
 
   const key = await crypto.subtle.importKey('jwk', jwk, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['verify']);
@@ -169,7 +268,7 @@ export async function verifyAccessJwt(
     : typeof payload.common_name === 'string' ? payload.common_name
       : typeof payload.sub === 'string' ? payload.sub : null;
   if (!actor) throw new AuthError('Access token has no subject.');
-  return { harness: 'human', actor, via: 'access' };
+  return { harness: 'human', actor, via: 'access', expiresAt: payload.exp * 1000 };
 }
 
 /**
@@ -215,6 +314,8 @@ const principalSchema = z.object({
   harness: harnessSchema,
   actor: z.string().min(1).max(200),
   via: z.enum(['access', 'service-token']),
+  expiresAt: z.number().int().positive().optional(),
+  tokenSha256: z.string().regex(/^[0-9a-f]{64}$/).optional(),
 });
 
 export function decodePrincipal(value: string | null): Principal | null {

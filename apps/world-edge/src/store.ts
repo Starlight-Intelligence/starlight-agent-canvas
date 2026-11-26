@@ -12,6 +12,7 @@ import {
   type WorldGraph,
   type WorldNode,
 } from '@starlight-agent-canvas/world';
+import { likePatterns } from './indexing.js';
 
 /**
  * SQLite layout for one world inside its Durable Object.
@@ -99,7 +100,28 @@ export const SCHEMA_SQL = [
     actor TEXT,
     created_at TEXT NOT NULL
   )`,
+  // Index sync jobs (D1 + Vectorize) that have not succeeded yet. A row is
+  // written with every committed batch and deleted once the index has it, so
+  // a failed sync is retried (alarm or next write) instead of being lost.
+  `CREATE TABLE IF NOT EXISTS index_jobs (
+    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+    node_ids TEXT NOT NULL,
+    removed_ids TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
+    created_at TEXT NOT NULL
+  )`,
 ];
+
+export interface IndexJob {
+  seq: number;
+  nodeIds: string[];
+  removedIds: string[];
+  attempts: number;
+}
+
+export const PROPOSALS_PAGE_DEFAULT = 100;
+export const PROPOSALS_PAGE_MAX = 500;
 
 type Row = Record<string, SqlStorageValue>;
 
@@ -284,18 +306,30 @@ export class WorldStore {
     ).map((r) => JSON.parse(String(r.data)) as WorldNode);
   }
 
-  /** Per-tile counts by kind, for the cluster zoom level. */
+  /**
+   * Per-tile counts by kind, for the cluster zoom level. Same node set as
+   * nodesInTiles (exact overlap with `bounds`, plus oversized nodes through
+   * their partial index), so cluster and card views agree on what is inside.
+   */
   tileCounts(
     tiles: readonly string[],
+    bounds: { x: number; y: number; w: number; h: number },
     options: { regionId?: string; kinds?: readonly string[] } = {},
   ): { tile: string; kind: string; count: number; x: number; y: number }[] {
     const kinds = options.kinds && options.kinds.length > 0 ? JSON.stringify(options.kinds) : null;
+    const filters = `x < ?2 + ?4 AND x + w > ?2 AND y < ?3 + ?5 AND y + h > ?3
+         AND (?6 IS NULL OR region_id = ?6)
+         AND (?7 IS NULL OR kind IN (SELECT value FROM json_each(?7)))`;
     return this.rows(
-      `SELECT tile_key, kind, COUNT(*) AS n, AVG(x) AS cx, AVG(y) AS cy FROM nodes
-       WHERE tile_key IN (SELECT value FROM json_each(?1)) AND (?2 IS NULL OR region_id = ?2)
-         AND (?3 IS NULL OR kind IN (SELECT value FROM json_each(?3)))
+      `SELECT tile_key, kind, COUNT(*) AS n, AVG(x) AS cx, AVG(y) AS cy FROM (
+         SELECT id, tile_key, kind, x, y FROM nodes
+         WHERE tile_key IN (SELECT value FROM json_each(?1)) AND ${filters}
+         UNION
+         SELECT id, tile_key, kind, x, y FROM nodes
+         WHERE (w > ${TILE_SIZE} OR h > ${TILE_SIZE}) AND ${filters}
+       )
        GROUP BY tile_key, kind`,
-      JSON.stringify(tiles), options.regionId ?? null, kinds,
+      JSON.stringify(tiles), bounds.x, bounds.y, bounds.w, bounds.h, options.regionId ?? null, kinds,
     ).map((r) => ({ tile: String(r.tile_key), kind: String(r.kind), count: Number(r.n), x: Number(r.cx), y: Number(r.cy) }));
   }
 
@@ -304,17 +338,28 @@ export class WorldStore {
       .map((r) => JSON.parse(String(r.data)) as WorldNode);
   }
 
-  /** Local fallback search over title and summary. */
+  countNodesInRegion(regionId: string): number {
+    return Number(this.rows('SELECT COUNT(*) AS n FROM nodes WHERE region_id = ?', regionId)[0]?.n ?? 0);
+  }
+
+  /**
+   * Local fallback search over title and summary. The query becomes at most
+   * LIKE_MAX_TERMS escaped patterns of at most 50 bytes each (likePatterns);
+   * every pattern must match the title or the summary.
+   */
   searchLike(query: string, options: { kinds?: readonly string[]; limit: number }): WorldNode[] {
-    const pattern = `%${query.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+    const patterns = likePatterns(query);
+    if (patterns.length === 0) return [];
     const kinds = options.kinds && options.kinds.length > 0 ? JSON.stringify(options.kinds) : null;
     return this.rows(
       `SELECT data FROM nodes
-       WHERE (title LIKE ?1 ESCAPE '\\' OR json_extract(data, '$.summary') LIKE ?1 ESCAPE '\\')
+       WHERE NOT EXISTS (
+           SELECT 1 FROM json_each(?1) AS t
+           WHERE NOT (title LIKE t.value ESCAPE '\\' OR json_extract(data, '$.summary') LIKE t.value ESCAPE '\\'))
          AND (?2 IS NULL OR kind IN (SELECT value FROM json_each(?2)))
-       ORDER BY CASE WHEN title LIKE ?1 ESCAPE '\\' THEN 0 ELSE 1 END, length(title), id
+       ORDER BY CASE WHEN title LIKE ?4 ESCAPE '\\' THEN 0 ELSE 1 END, length(title), id
        LIMIT ?3`,
-      pattern, kinds, options.limit,
+      JSON.stringify(patterns), kinds, options.limit, patterns[0],
     ).map((r) => JSON.parse(String(r.data)) as WorldNode);
   }
 
@@ -460,11 +505,29 @@ export class WorldStore {
     );
   }
 
-  listProposals(status?: string): CanonProposalRow[] {
-    return this.rows(
-      'SELECT * FROM canon_proposals WHERE (?1 IS NULL OR status = ?1) ORDER BY created_at, id',
-      status ?? null,
-    ).map((r) => ({
+  countProposals(status?: string): number {
+    return Number(this.rows('SELECT COUNT(*) AS n FROM canon_proposals WHERE (?1 IS NULL OR status = ?1)', status ?? null)[0]?.n ?? 0);
+  }
+
+  /**
+   * One page of proposals in insertion order. `cursor` is the opaque
+   * `nextCursor` of the previous page (a rowid); null when there is no more.
+   */
+  listProposals(options: { status?: string; limit?: number; cursor?: string } = {}): { proposals: CanonProposalRow[]; nextCursor: string | null } {
+    const limit = Math.min(Math.max(1, Math.floor(options.limit ?? PROPOSALS_PAGE_DEFAULT)), PROPOSALS_PAGE_MAX);
+    if (options.cursor !== undefined && !/^\d{1,15}$/.test(options.cursor)) throw new Error('Invalid cursor.');
+    const after = options.cursor === undefined ? 0 : Number(options.cursor);
+    const rows = this.rows(
+      'SELECT rowid AS rid, * FROM canon_proposals WHERE (?1 IS NULL OR status = ?1) AND rowid > ?2 ORDER BY rowid LIMIT ?3',
+      options.status ?? null, after, limit + 1,
+    );
+    const page = rows.slice(0, limit);
+    const nextCursor = rows.length > limit ? String(page.at(-1)!.rid) : null;
+    return { proposals: page.map((r) => this.proposalRow(r)), nextCursor };
+  }
+
+  private proposalRow(r: Row): CanonProposalRow {
+    return {
       id: String(r.id),
       title: String(r.title),
       nodeIds: JSON.parse(String(r.node_ids)) as string[],
@@ -476,6 +539,32 @@ export class WorldStore {
       harness: String(r.harness),
       actor: r.actor === null ? null : String(r.actor),
       createdAt: String(r.created_at),
-    }));
+    };
+  }
+
+  // ----------------------------------------------------------- index jobs --
+
+  enqueueIndexJob(nodeIds: readonly string[], removedIds: readonly string[], at: string): void {
+    if (nodeIds.length === 0 && removedIds.length === 0) return;
+    this.sql.exec('INSERT INTO index_jobs (node_ids, removed_ids, created_at) VALUES (?, ?, ?)', JSON.stringify(nodeIds), JSON.stringify(removedIds), at);
+  }
+
+  /** Oldest pending job, or null. Jobs run strictly in order. */
+  nextIndexJob(): IndexJob | null {
+    const r = this.rows('SELECT seq, node_ids, removed_ids, attempts FROM index_jobs ORDER BY seq LIMIT 1')[0];
+    if (!r) return null;
+    return { seq: Number(r.seq), nodeIds: JSON.parse(String(r.node_ids)) as string[], removedIds: JSON.parse(String(r.removed_ids)) as string[], attempts: Number(r.attempts) };
+  }
+
+  completeIndexJob(seq: number): void {
+    this.sql.exec('DELETE FROM index_jobs WHERE seq = ?', seq);
+  }
+
+  failIndexJob(seq: number, error: string): void {
+    this.sql.exec('UPDATE index_jobs SET attempts = attempts + 1, last_error = ? WHERE seq = ?', error.slice(0, 1000), seq);
+  }
+
+  countIndexJobs(): number {
+    return Number(this.rows('SELECT COUNT(*) AS n FROM index_jobs')[0]?.n ?? 0);
   }
 }

@@ -19,6 +19,45 @@ export interface SearchHit {
 
 export type SearchMode = 'semantic' | 'd1-like' | 'do-like';
 
+/**
+ * D1 and Durable Object SQLite cap a LIKE/GLOB pattern at 50 bytes
+ * (SQLITE_LIMIT_LIKE_PATTERN_LENGTH); a longer pattern fails the whole query
+ * with "LIKE or GLOB pattern too complex".
+ */
+export const LIKE_PATTERN_MAX_BYTES = 50;
+/** Terms of a text query that take part in matching. */
+export const LIKE_MAX_TERMS = 4;
+
+const utf8 = new TextEncoder();
+
+/**
+ * Turn a free-text query into LIKE patterns that always fit the limit: split
+ * on whitespace, escape % _ and \ (for ESCAPE '\\'), cut each term at a
+ * character boundary so `%term%` stays within LIKE_PATTERN_MAX_BYTES, keep
+ * the LIKE_MAX_TERMS longest distinct terms. A node matches when every
+ * pattern matches its title or summary. Empty when the query has no terms.
+ */
+export function likePatterns(query: string): string[] {
+  const terms = query.trim().split(/\s+/).filter(Boolean).sort((a, b) => b.length - a.length);
+  const patterns: string[] = [];
+  for (const term of terms) {
+    let body = '';
+    let bytes = 2; // the two % wildcards
+    for (const ch of term) {
+      const escaped = ch === '\\' || ch === '%' || ch === '_' ? `\\${ch}` : ch;
+      const size = utf8.encode(escaped).length;
+      if (bytes + size > LIKE_PATTERN_MAX_BYTES) break;
+      body += escaped;
+      bytes += size;
+    }
+    const pattern = `%${body}%`;
+    if (!body || patterns.includes(pattern)) continue;
+    patterns.push(pattern);
+    if (patterns.length >= LIKE_MAX_TERMS) break;
+  }
+  return patterns;
+}
+
 export function embeddingText(node: Pick<WorldNode, 'title' | 'summary'>): string {
   return node.summary ? `${node.title}\n${node.summary}` : node.title;
 }
@@ -142,15 +181,17 @@ export async function d1Search(
   limit: number,
 ): Promise<SearchHit[] | null> {
   if (!env.WORLD_INDEX) return null;
-  const pattern = `%${query.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+  const patterns = likePatterns(query);
+  if (patterns.length === 0) return [];
   const kindsJson = kinds && kinds.length > 0 ? JSON.stringify(kinds) : null;
   const { results } = await env.WORLD_INDEX.prepare(
     `SELECT node_id, kind, title, summary, x, y, region_id FROM world_nodes
-     WHERE world_id = ?1 AND (title LIKE ?2 ESCAPE '\\' OR summary LIKE ?2 ESCAPE '\\')
+     WHERE world_id = ?1
+       AND NOT EXISTS (SELECT 1 FROM json_each(?2) AS t WHERE NOT (title LIKE t.value ESCAPE '\\' OR summary LIKE t.value ESCAPE '\\'))
        AND (?3 IS NULL OR kind IN (SELECT value FROM json_each(?3)))
-     ORDER BY CASE WHEN title LIKE ?2 ESCAPE '\\' THEN 0 ELSE 1 END, length(title), node_id
+     ORDER BY CASE WHEN title LIKE ?5 ESCAPE '\\' THEN 0 ELSE 1 END, length(title), node_id
      LIMIT ?4`,
-  ).bind(worldId, pattern, kindsJson, limit).all<Record<string, unknown>>();
+  ).bind(worldId, JSON.stringify(patterns), kindsJson, limit, patterns[0]).all<Record<string, unknown>>();
   return results.map((r) => ({
     id: String(r.node_id),
     kind: String(r.kind),
