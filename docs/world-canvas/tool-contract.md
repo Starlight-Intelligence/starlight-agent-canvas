@@ -1,8 +1,8 @@
 # World Canvas MCP Tool Contract (as the client sees it)
 
-Status: written by lane L5 on 2026-11-25 for issue #63. It mirrors L2's server on branch `agent/claude-cloud/world-edge` at commit 161c054 (`apps/world-edge/src/tools.ts`, `mcp.ts`, `world-agent.ts`, `region.ts`, `indexing.ts`, `store.ts`). L2's code is the authority for the server; spec section 8 names the tools but not the exact shapes. If L2 changes a shape, `@starlight-agent-canvas/world-agents` must change with it, because the client validates every result.
+Status: written by lane L5 on 2026-11-25 for issue #63. It mirrors L2's server on branch `agent/claude-cloud/world-edge` at commit 4705a14 (`apps/world-edge/src/tools.ts`, `mcp.ts`, `world-agent.ts`, `region.ts`, `indexing.ts`, `store.ts`). Rechecked on 2026-11-26 against the 161c054..4705a14 diff: auth, tool names, annotations and write-tool shapes are unchanged. What changed and touches this contract: the `get_region` truncation flags, the `kinds` filter on `cluster` counts and semantic `search`, and proposal reconciliation in `packages/world` (see below). L2's code is the authority for the server; spec section 8 names the tools but not the exact shapes. If L2 changes a shape, `@starlight-agent-canvas/world-agents` must change with it, because the client validates every result.
 
-Input schemas are shared with the server from `packages/world/src/tools.ts` (`WORLD_TOOL_INPUTS`). The client's output schemas are in `packages/world-agents/src/client/tools.ts` (`WORLD_TOOLS`). Entity schemas (`WorldNode`, `WorldEdge`, `World`, `Actor`, ops) are L1's, from `packages/world`.
+Input schemas are shared with the server from `packages/world/src/tools.ts` (`WORLD_TOOL_INPUTS`). That sharing holds on the integration branch, where `apps/world-edge/src/tools.ts` re-exports them. L2's own branch at 4705a14 still declares equivalent schemas locally in that file: they match field for field today, but are one source only once L2 takes the integration change. The client's output schemas are in `packages/world-agents/src/client/tools.ts` (`WORLD_TOOLS`). Entity schemas (`WorldNode`, `WorldEdge`, `World`, `Actor`, ops) are L1's, from `packages/world`.
 
 ## Transport
 
@@ -37,18 +37,18 @@ Unknown extra keys on objects are ignored, so additive server fields are safe.
 | Tool | Output |
 | --- | --- |
 | `get_world` | `{world: World, counts: {nodes, edges, nodesByKind: Record<string, int>, edgesByRelation: Record<string, int>}, openProposals}` |
-| `get_region` | `{ok: true, version, level, bounds, regions, clusters: [{tile, count, byKind, center: {x, y}}], nodes, edges, truncated, nodesTruncated, edgesTruncated}` |
+| `get_region` | `{ok: true, version, level, bounds, regions, clusters: [{tile, count, byKind, center: {x, y}}], nodes, edges, truncated, nodesTruncated, edgesTruncated}`; the server sends all three flags at 4705a14, but the client's output schema validates only `truncated` and drops the other two |
 | `search` | `{mode: "semantic", "d1-like" or "do-like", hits: [{id, kind, title, summary, position, regionId, score?}]}` |
-| `add_node`, `update_node`, `link`, `move` | WriteResult: `{ok: true, version, seq, nodes: WorldNode[], edges: WorldEdge[], removedNodes, removedEdges, proposals: CanonProposal[]}` |
+| `add_node`, `update_node`, `link`, `move` | WriteResult: `{ok: true, version, seq, nodes: WorldNode[], edges: WorldEdge[], removedNodes, removedEdges, proposals: CanonProposal[]}`; `proposals` holds at most one entry per target, at its final version, and omits a target edited back to draft or removed later in the same batch |
 | `propose_canon` | WriteResult plus `proposalId` |
 | `layout_region` | WriteResult plus `moved` (a count) |
 | `import_whiteboard` | `{ok: true, version, seq, report}`, or with `dryRun` `{ok: true, dryRun: true, report}` |
 
 `version` on a result is the world version after the call. `get_world` carries it as `world.version`; `search` carries none.
 
-`get_region` by level: `cluster` returns per-tile `clusters` and empty `nodes` and `edges`; `card` returns node cards (`{id, kind, title, tags, position, size?, regionId, layer, canon, version, thumbnail?}`) and edge summaries (`{id, from, to, relation, label?, canon, version}`); `full` returns whole `WorldNode` and `WorldEdge` objects. Cards carry `version`, so agents can take `baseVersion` from them, but they have no `summary` or `body`: read at `full` before editing text. If `truncated` is true, more nodes matched than `limit`.
+`get_region` by level: `cluster` returns per-tile `clusters` and empty `nodes` and `edges`; `card` returns node cards (`{id, kind, title, tags, position, size?, regionId, layer, canon, version, thumbnail?}`) and edge summaries (`{id, from, to, relation, label?, canon, version}`); `full` returns whole `WorldNode` and `WorldEdge` objects. Cards carry `version`, so agents can take `baseVersion` from them, but they have no `summary` or `body`: read at `full` before editing text. `truncated` is true when either list was cut: more nodes matched than `limit`, or more than 20,000 edges touch the returned nodes; `nodesTruncated` and `edgesTruncated` say which. `kinds` also filters `cluster` counts, and nodes wider or taller than one tile are returned wherever they overlap the viewport.
 
-`propose_canon` does not open a PR. It marks the targets `proposed` and stores a proposal row (`{id, title, nodeIds, edgeIds, rationale, status: "open", prUrl: null, worldVersion, harness, actor, createdAt}`, readable at `GET /agents/world-agent/<worldId>/proposals?status=open`). `canonProposalRequestFromRow` in `world-agents` turns such a row into input for `openCanonPr`, which opens the draft PR. As of 161c054 nothing runs this automatically, and rows that name edges are refused (`UNSUPPORTED_TARGET`) because canon-pr handles nodes only.
+`propose_canon` does not open a PR. It marks the targets `proposed` and stores a proposal row (`{id, title, nodeIds, edgeIds, rationale, status: "open", prUrl: null, worldVersion, harness, actor, createdAt}`, readable at `GET /agents/world-agent/<worldId>/proposals?status=open`). `canonProposalRequestFromRow` in `world-agents` turns such a row into input for `openCanonPr`, which opens the draft PR. As of 4705a14 nothing runs this automatically (the web inspector says the same: a maintainer opens the PR with the canon-pr tool), and rows that name edges are refused (`UNSUPPORTED_TARGET`) because canon-pr handles nodes only.
 
 ## Errors
 
