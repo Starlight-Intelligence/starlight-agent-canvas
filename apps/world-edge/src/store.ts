@@ -1,5 +1,6 @@
 import {
   edgeIdFor,
+  TILE_SIZE,
   tileKey,
   WORLD_GRAPH_SCHEMA_VERSION,
   type Actor,
@@ -52,6 +53,10 @@ export const SCHEMA_SQL = [
   `CREATE INDEX IF NOT EXISTS nodes_region ON nodes (region_id)`,
   `CREATE INDEX IF NOT EXISTS nodes_xy ON nodes (x, y)`,
   `CREATE INDEX IF NOT EXISTS nodes_kind ON nodes (kind)`,
+  // Nodes wider or taller than one tile can overlap a viewport whose padded
+  // tiles miss their origin tile. They are rare, so they get their own small
+  // partial index and an extra query path (see nodesInTiles).
+  `CREATE INDEX IF NOT EXISTS nodes_oversized ON nodes (x, y) WHERE w > ${TILE_SIZE} OR h > ${TILE_SIZE}`,
   `CREATE TABLE IF NOT EXISTS edges (
     id TEXT PRIMARY KEY,
     from_id TEXT NOT NULL,
@@ -261,12 +266,18 @@ export class WorldStore {
     options: { regionId?: string; limit: number; kinds?: readonly string[] },
   ): WorldNode[] {
     const kinds = options.kinds && options.kinds.length > 0 ? JSON.stringify(options.kinds) : null;
-    return this.rows(
-      `SELECT data FROM nodes
-       WHERE tile_key IN (SELECT value FROM json_each(?1))
-         AND x < ?2 + ?4 AND x + w > ?2 AND y < ?3 + ?5 AND y + h > ?3
+    // Two paths, both exact on overlap: nodes found through the padded tiles
+    // (anything at most one tile wide and tall), plus oversized nodes through
+    // their partial index wherever their origin is. UNION removes duplicates.
+    const filters = `x < ?2 + ?4 AND x + w > ?2 AND y < ?3 + ?5 AND y + h > ?3
          AND (?6 IS NULL OR region_id = ?6)
-         AND (?7 IS NULL OR kind IN (SELECT value FROM json_each(?7)))
+         AND (?7 IS NULL OR kind IN (SELECT value FROM json_each(?7)))`;
+    return this.rows(
+      `SELECT data, layer, id FROM nodes
+       WHERE tile_key IN (SELECT value FROM json_each(?1)) AND ${filters}
+       UNION
+       SELECT data, layer, id FROM nodes
+       WHERE (w > ${TILE_SIZE} OR h > ${TILE_SIZE}) AND ${filters}
        ORDER BY layer, id
        LIMIT ?8`,
       JSON.stringify(tiles), bounds.x, bounds.y, bounds.w, bounds.h, options.regionId ?? null, kinds, options.limit,

@@ -60,7 +60,7 @@ Canon is never written here. `applyOps` refuses `canon` in any op, `importGraph`
   - `cluster` (zoom below 0.4): per-tile counts by kind and the mean position. No nodes.
   - `card`: id, kind, title, tags, position, size, canon, version and one thumbnail. No body.
   - `full`: complete nodes.
-- Limits: at most 1024 tiles per query (`BOUNDS_TOO_LARGE` otherwise), 2000 nodes by default and 5000 at most, with `truncated: true` when cut. Edges come back when either end is in the result.
+- Limits: at most 1024 tiles per query (`BOUNDS_TOO_LARGE` otherwise), 2000 nodes by default and 5000 at most, with `truncated: true` when either list is cut (`nodesTruncated` and `edgesTruncated` say which; edges cap at 20000). Edges come back when either end is in the result. Nodes larger than one tile are found through a separate partial index, so they show wherever they overlap the viewport.
 - Id lists go to SQLite as one JSON parameter through `json_each`, so no query hits the bound-parameter limit.
 - The synced Agent state never contains nodes. Clients fetch regions and apply diffs.
 
