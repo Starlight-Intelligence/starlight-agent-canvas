@@ -1,3 +1,4 @@
+import type { OAuthHelpers } from '@cloudflare/workers-oauth-provider';
 import type { WorldAgent } from './world-agent.js';
 
 /**
@@ -25,6 +26,37 @@ export interface Env {
   MCP_SERVICE_TOKENS?: string;
   /** Secret. HMAC key for signed R2 upload URLs. */
   MEDIA_SIGNING_KEY?: string;
+
+  // --- OAuth for MCP clients (src/oauth.ts). OAuth is on only when both
+  // PUBLIC_ORIGIN and OAUTH_KV are present.
+
+  /**
+   * Plain var. The one public origin of this Worker, e.g. "https://world.example.com":
+   * https, no path, no trailing slash (http only on a loopback host for local dev).
+   * The OAuth issuer is this value and the protected resource is `${PUBLIC_ORIGIN}/mcp`.
+   */
+  PUBLIC_ORIGIN?: string;
+  /** KV namespace for the OAuth provider: clients, grants, tokens (hashed), consent and upstream transactions. */
+  OAUTH_KV?: KVNamespace;
+  /**
+   * Plain var. Whitespace or comma separated OAuth redirect URI allowlist (src/redirect-allowlist.ts).
+   * Unset or empty: no OAuth redirect is allowed.
+   */
+  OAUTH_REDIRECT_ALLOWLIST?: string;
+
+  /** Secret. Client ID of the Access for SaaS (OIDC) application. */
+  ACCESS_CLIENT_ID?: string;
+  /** Secret. Client secret of the Access for SaaS (OIDC) application. */
+  ACCESS_CLIENT_SECRET?: string;
+  /** Secret. Token endpoint, https://<team>.cloudflareaccess.com/cdn-cgi/access/sso/oidc/<client_id>/token. */
+  ACCESS_TOKEN_URL?: string;
+  /** Secret. Authorization endpoint, .../sso/oidc/<client_id>/authorization. */
+  ACCESS_AUTHORIZATION_URL?: string;
+  /** Secret. Key endpoint, .../sso/oidc/<client_id>/jwks. */
+  ACCESS_JWKS_URL?: string;
+
+  /** Set by @cloudflare/workers-oauth-provider before it calls a handler. Never configured. */
+  OAUTH_PROVIDER?: OAuthHelpers;
 }
 
 declare global {

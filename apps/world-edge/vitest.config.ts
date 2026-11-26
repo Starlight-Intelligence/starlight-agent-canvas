@@ -12,6 +12,9 @@ export const TEST_TOKENS = {
   codex: 'test-token-codex-0123456789abcdef',
 } as const;
 
+/** Fake Access for SaaS (OIDC) app for the OAuth tests (test/oauth-helpers.ts). Not secrets. */
+const TEST_ACCESS_ISSUER = 'https://test-team.cloudflareaccess.com/cdn-cgi/access/sso/oidc/test-access-client';
+
 const sha = (value: string) => createHash('sha256').update(value).digest('hex');
 
 export default defineConfig(async () => {
@@ -32,6 +35,13 @@ export default defineConfig(async () => {
               { name: 'codex-test', harness: 'codex', sha256: sha(TEST_TOKENS.codex) },
             ]),
             MEDIA_SIGNING_KEY: 'test-only-media-signing-key',
+            // OAuth on, at the hostname the tests already use.
+            PUBLIC_ORIGIN: 'https://world-edge.test',
+            ACCESS_CLIENT_ID: 'test-access-client',
+            ACCESS_CLIENT_SECRET: 'test-only-access-client-secret',
+            ACCESS_TOKEN_URL: `${TEST_ACCESS_ISSUER}/token`,
+            ACCESS_AUTHORIZATION_URL: `${TEST_ACCESS_ISSUER}/authorization`,
+            ACCESS_JWKS_URL: `${TEST_ACCESS_ISSUER}/jwks`,
           },
         },
       }),

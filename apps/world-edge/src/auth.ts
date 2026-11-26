@@ -2,17 +2,45 @@ import { harnessSchema } from '@starlight-agent-canvas/world';
 import { z } from 'zod';
 import type { Env } from './env.js';
 
+/** OAuth scopes this Worker grants. Order is the display order on the consent page. */
+export const WORLD_SCOPES = ['world:read', 'world:write', 'world:propose'] as const;
+export type WorldScope = (typeof WORLD_SCOPES)[number];
+
+export function isWorldScope(value: unknown): value is WorldScope {
+  return typeof value === 'string' && (WORLD_SCOPES as readonly string[]).includes(value);
+}
+
 /**
  * Authenticated caller. Every write records `harness` and `actor` in the
- * ops_log. Built only by `authenticate` or `authenticateMcp`; never parsed
- * from client JSON.
+ * ops_log. Built only by `authenticate`, `authenticateMcp` or the OAuth
+ * provider's verified token context (src/oauth.ts); never parsed from client
+ * JSON.
  */
-export interface Principal {
-  /** human for browsers behind Access; claude, codex, chatgpt ... for service tokens. */
+export type Principal = {
+  /** human for browsers behind Access; claude, codex, chatgpt ... for service tokens and OAuth clients. */
   harness: string;
-  /** Stable id: Access identity email, or the service token name. */
+  /** Stable id: Access identity email (browser or OAuth sign-in), or the service token name. */
   actor: string;
-  via: 'access' | 'service-token';
+} & (
+  | { via: 'access' | 'service-token' }
+  /** An OAuth access token this Worker issued. `scopes` are the granted scopes the provider verified. */
+  | { via: 'oauth'; scopes: WorldScope[] }
+);
+
+/**
+ * Scopes a principal holds on /mcp. Service tokens hold all of them (they
+ * predate OAuth and are per-client secrets). OAuth principals hold exactly
+ * what was granted. Browser Access identities never reach /mcp and hold none.
+ */
+export function principalScopes(principal: Principal): readonly WorldScope[] {
+  switch (principal.via) {
+    case 'service-token':
+      return WORLD_SCOPES;
+    case 'oauth':
+      return principal.scopes;
+    case 'access':
+      return [];
+  }
 }
 
 /** Internal header the Worker sets after auth, before forwarding to the Durable Object. */
@@ -65,15 +93,17 @@ export async function verifyServiceToken(token: string, env: Pick<Env, 'MCP_SERV
 }
 
 // ---------------------------------------------------------------------------
-// Cloudflare Access JWT (Cf-Access-Jwt-Assertion), RS256, keys from
-// <team domain>/cdn-cgi/access/certs.
+// RS256 JWT verification against a JWKS URL. Used for the browser Access JWT
+// (Cf-Access-Jwt-Assertion, keys from <team domain>/cdn-cgi/access/certs) and
+// for the id_token of the Access for SaaS OIDC sign-in (src/access-oidc.ts).
 // ---------------------------------------------------------------------------
 
 interface Jwk extends JsonWebKey {
   kid?: string;
 }
 
-let jwksCache: { url: string; keys: Jwk[]; fetchedAt: number } | null = null;
+/** One cache entry per JWKS URL, so the two Access key sets never evict each other. */
+const jwksCache = new Map<string, { keys: Jwk[]; fetchedAt: number }>();
 const JWKS_TTL_MS = 10 * 60 * 1000;
 
 export type JwksFetcher = (url: string) => Promise<{ keys: Jwk[] }>;
@@ -103,18 +133,78 @@ export function normalizeTeamDomain(domain: string): string {
   return url.origin;
 }
 
-async function loadKeys(teamDomain: string, fetcher: JwksFetcher, forceRefresh: boolean): Promise<Jwk[]> {
-  const url = `${teamDomain}/cdn-cgi/access/certs`;
+async function loadKeys(url: string, fetcher: JwksFetcher, forceRefresh: boolean): Promise<Jwk[]> {
   const now = Date.now();
-  if (!forceRefresh && jwksCache && jwksCache.url === url && now - jwksCache.fetchedAt < JWKS_TTL_MS) return jwksCache.keys;
+  const cached = jwksCache.get(url);
+  if (!forceRefresh && cached && now - cached.fetchedAt < JWKS_TTL_MS) return cached.keys;
   const { keys } = await fetcher(url);
-  jwksCache = { url, keys: Array.isArray(keys) ? keys : [], fetchedAt: now };
-  return jwksCache.keys;
+  const entry = { keys: Array.isArray(keys) ? keys : [], fetchedAt: now };
+  jwksCache.set(url, entry);
+  return entry.keys;
 }
 
 /** Test hook. */
 export function resetJwksCache(): void {
-  jwksCache = null;
+  jwksCache.clear();
+}
+
+export interface Rs256JwtOptions {
+  /** JWKS endpoint holding the signing keys. */
+  jwksUrl: string;
+  /** Used in error messages, e.g. "Access token". */
+  label: string;
+  /** Refuse a token whose header has no string kid. */
+  requireKid?: boolean;
+  fetcher?: JwksFetcher;
+  now?: number;
+}
+
+/**
+ * Verify an RS256 JWT: header alg, key by kid from the JWKS (cached, refreshed
+ * once on an unknown kid), signature, exp (required) and nbf with 60 s skew.
+ * Returns the payload. Issuer, audience and every other claim are the
+ * caller's to check. Throws AuthError (status 401, or 503 when the keys
+ * cannot be loaded).
+ */
+export async function verifyRs256Jwt(token: string, options: Rs256JwtOptions): Promise<Record<string, unknown>> {
+  const { label } = options;
+  const parts = token.split('.');
+  if (parts.length !== 3) throw new AuthError(`Malformed ${label}.`);
+  let header: Record<string, unknown>;
+  let payload: Record<string, unknown>;
+  try {
+    header = decodeJson(parts[0]!);
+    payload = decodeJson(parts[1]!);
+  } catch {
+    throw new AuthError(`Malformed ${label}.`);
+  }
+  if (header.alg !== 'RS256') throw new AuthError(`Unsupported ${label} algorithm.`);
+  if (options.requireKid && typeof header.kid !== 'string') throw new AuthError(`${label} has no key id.`);
+
+  const fetcher = options.fetcher ?? defaultFetcher;
+  let keys = await loadKeys(options.jwksUrl, fetcher, false);
+  let jwk = keys.find((key) => key.kid === header.kid);
+  if (!jwk) {
+    // Key rotation: refresh once.
+    keys = await loadKeys(options.jwksUrl, fetcher, true);
+    jwk = keys.find((key) => key.kid === header.kid);
+  }
+  if (!jwk) throw new AuthError(`${label} signed by an unknown key.`);
+
+  const key = await crypto.subtle.importKey('jwk', jwk, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['verify']);
+  const valid = await crypto.subtle.verify(
+    'RSASSA-PKCS1-v1_5',
+    key,
+    base64UrlDecode(parts[2]!),
+    encoder.encode(`${parts[0]}.${parts[1]}`),
+  );
+  if (!valid) throw new AuthError(`${label} signature is invalid.`);
+
+  const nowSec = Math.floor((options.now ?? Date.now()) / 1000);
+  const skew = 60;
+  if (typeof payload.exp !== 'number' || payload.exp + skew < nowSec) throw new AuthError(`${label} expired.`);
+  if (typeof payload.nbf === 'number' && payload.nbf - skew > nowSec) throw new AuthError(`${label} not yet valid.`);
+  return payload;
 }
 
 export async function verifyAccessJwt(
@@ -126,41 +216,12 @@ export async function verifyAccessJwt(
     throw new AuthError('Access is not configured on this Worker (ACCESS_TEAM_DOMAIN, ACCESS_AUD).', 401);
   }
   const teamDomain = normalizeTeamDomain(env.ACCESS_TEAM_DOMAIN);
-  const parts = token.split('.');
-  if (parts.length !== 3) throw new AuthError('Malformed Access token.');
-  let header: Record<string, unknown>;
-  let payload: Record<string, unknown>;
-  try {
-    header = decodeJson(parts[0]!);
-    payload = decodeJson(parts[1]!);
-  } catch {
-    throw new AuthError('Malformed Access token.');
-  }
-  if (header.alg !== 'RS256') throw new AuthError('Unsupported Access token algorithm.');
-
-  const fetcher = options.fetcher ?? defaultFetcher;
-  let keys = await loadKeys(teamDomain, fetcher, false);
-  let jwk = keys.find((key) => key.kid === header.kid);
-  if (!jwk) {
-    // Key rotation: refresh once.
-    keys = await loadKeys(teamDomain, fetcher, true);
-    jwk = keys.find((key) => key.kid === header.kid);
-  }
-  if (!jwk) throw new AuthError('Access token signed by an unknown key.');
-
-  const key = await crypto.subtle.importKey('jwk', jwk, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['verify']);
-  const valid = await crypto.subtle.verify(
-    'RSASSA-PKCS1-v1_5',
-    key,
-    base64UrlDecode(parts[2]!),
-    encoder.encode(`${parts[0]}.${parts[1]}`),
-  );
-  if (!valid) throw new AuthError('Access token signature is invalid.');
-
-  const nowSec = Math.floor((options.now ?? Date.now()) / 1000);
-  const skew = 60;
-  if (typeof payload.exp !== 'number' || payload.exp + skew < nowSec) throw new AuthError('Access token expired.');
-  if (typeof payload.nbf === 'number' && payload.nbf - skew > nowSec) throw new AuthError('Access token not yet valid.');
+  const payload = await verifyRs256Jwt(token, {
+    jwksUrl: `${teamDomain}/cdn-cgi/access/certs`,
+    label: 'Access token',
+    fetcher: options.fetcher,
+    now: options.now,
+  });
   if (payload.iss !== teamDomain) throw new AuthError('Access token issuer mismatch.');
   const aud = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
   if (!aud.includes(env.ACCESS_AUD)) throw new AuthError('Access token audience mismatch.');
@@ -227,11 +288,11 @@ export function encodePrincipal(principal: Principal): string {
   return JSON.stringify(principal);
 }
 
-const principalSchema = z.object({
-  harness: harnessSchema,
-  actor: z.string().min(1).max(200),
-  via: z.enum(['access', 'service-token']),
-});
+const principalBase = { harness: harnessSchema, actor: z.string().min(1).max(200) };
+const principalSchema = z.discriminatedUnion('via', [
+  z.object({ ...principalBase, via: z.enum(['access', 'service-token']) }),
+  z.object({ ...principalBase, via: z.literal('oauth'), scopes: z.array(z.enum(WORLD_SCOPES)).max(WORLD_SCOPES.length) }),
+]);
 
 export function decodePrincipal(value: string | null): Principal | null {
   if (!value) return null;
