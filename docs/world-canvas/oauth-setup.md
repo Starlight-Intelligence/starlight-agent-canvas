@@ -67,7 +67,7 @@ cd apps/world-edge && npx wrangler login && cd ../..
    ```
 
    and in `vars`, replace the placeholder: `"PUBLIC_ORIGIN": "https://<host>"`. Until it is replaced, `/mcp` and the OAuth routes answer 500 (`OAUTH_MISCONFIGURED`) on purpose. Verified (code). The `custom_domain` route form is shown in the OAuth library's guide (`docs/resource-servers.md`); Cloudflare's own page on it was not read. That a custom domain route creates the DNS record and certificate on deploy, and fails if the hostname already has a DNS record, is unverified.
-3. With OAuth on, `/mcp` works only on `<host>`. Every token, service tokens included, is bound to `https://<host>/mcp`, so a request on the `workers.dev` name gets 401. Point Claude Code and Codex at `https://<host>/mcp`. Verified (code). The examples in [connect-agents.md](./connect-agents.md) still show the `workers.dev` URL; use `https://<host>/mcp` in its place.
+3. With OAuth on, `/mcp` works only on `<host>`. Every token, service tokens included, is bound to `https://<host>/mcp`, so a request on the `workers.dev` name gets 401. Point Claude Code and Codex at `https://<host>/mcp`. Verified (code). The examples in [connect-agents.md](./connect-agents.md) (on branch `agent/managed/world-agents` until it merges) still show the `workers.dev` URL; use `https://<host>/mcp` in its place.
 
 ## 2. Create the OAuth storage (creates a resource)
 
@@ -117,7 +117,7 @@ All four are unverified until you run this. **If any of the first three differs,
 
 Also unverified: that the ID token carries the claims `sub` and `email` under those names, that its `aud` is the client ID, and that Access echoes the `nonce`. The Worker requires all of them. A mismatch shows up as an `access_denied` redirect after a successful Access login, with the reason in the Worker's logs (`npx wrangler tail`, look for `OAuth sign-in refused`).
 
-## 5. Set the secrets
+## 5. Set the secrets (may create the Worker)
 
 Each command prompts for the value. Paste the value at the prompt only.
 
@@ -134,7 +134,7 @@ npx wrangler secret put MEDIA_SIGNING_KEY
 
 Set them before the first deploy, because the deploy fails until all seven exist. On a Worker that was never deployed, `wrangler secret put` offers to create it first; accept. How this interacts with git-connected Workers Builds is unverified.
 
-The Worker refuses to start a sign-in unless `ACCESS_TOKEN_URL`, `ACCESS_AUTHORIZATION_URL` and `ACCESS_JWKS_URL` are https URLs without query or fragment and the token URL ends in `/token`. Watch for a trailing space when you paste. Verified (code).
+The Worker refuses to start a sign-in unless `ACCESS_TOKEN_URL`, `ACCESS_AUTHORIZATION_URL` and `ACCESS_JWKS_URL` are https URLs without query or fragment and the token URL ends in `/token`. Verified (code). Watch for a trailing space when you paste: on a URL it stops the sign-in with a 503 page, and on the client ID or secret it shows up later as `access_denied`.
 
 ## 6. Check the redirect allowlist
 
@@ -169,7 +169,7 @@ pnpm world-edge:dry-run    # rebuilds packages/world, bundles, lists bindings, u
 pnpm world-edge:deploy     # rebuilds packages/world, then wrangler deploy
 ```
 
-Do not run `npx wrangler deploy` directly in `apps/world-edge`: it does not rebuild `packages/world`, so it fails on a fresh checkout or uploads stale code. Verified (code) for the dry run; the deploy itself is unverified.
+Do not run `npx wrangler deploy` directly in `apps/world-edge`: it does not rebuild `packages/world`, so it fails on a fresh checkout or uploads stale code. The dry run was run successfully on this branch by the builder and two reviewers; the deploy itself is unverified.
 
 ## 9. Smoke-test the public surface
 
@@ -266,7 +266,7 @@ Access tokens last 1 hour. The grant, with its refresh tokens, ends 7 days after
 | What you see | Likely cause |
 | --- | --- |
 | JSON `OAUTH_MISCONFIGURED`, status 500, on `/mcp` or `/authorize` | `PUBLIC_ORIGIN` is still the placeholder or is not exactly `https://<host>` (lowercase, no port, no path, no trailing slash) |
-| Page "Sign-in is not configured on this server", status 503 | an `ACCESS_*` secret is missing, has a trailing space, or `ACCESS_TOKEN_URL` does not end in `/token`. `npx wrangler tail` shows `OAuth sign-in is not configured` with the reason |
+| Page "Sign-in is not configured on this server", status 503 | an `ACCESS_*` secret is missing, one of the three URLs has a trailing space, or `ACCESS_TOKEN_URL` does not end in `/token`. `npx wrangler tail` shows `OAuth sign-in is not configured` with the reason |
 | Page saying the redirect address is not on the allowlist | add the client's redirect URI to `OAUTH_REDIRECT_ALLOWLIST` (step 6) and deploy |
 | Page saying the app could not be verified | the Worker could not fetch the client's metadata document (step 7) |
 | `access_denied` back in ChatGPT or Claude right after a successful Access login | the ID token failed a check (step 4). `npx wrangler tail` shows `OAuth sign-in refused` with the reason |
