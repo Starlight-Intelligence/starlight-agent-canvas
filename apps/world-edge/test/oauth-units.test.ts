@@ -1,0 +1,268 @@
+import { createExecutionContext, waitOnExecutionContext } from 'cloudflare:test';
+import { describe, expect, it } from 'vitest';
+import { readAccessOidcConfig } from '../src/access-oidc.js';
+import type { Env } from '../src/env.js';
+import { harnessForClient } from '../src/harness.js';
+import worker from '../src/index.js';
+import { mcpHostOptions, TOOL_SCOPES } from '../src/mcp.js';
+import { parsePublicOrigin, principalFromVerifiedContext, resolveOAuth } from '../src/oauth.js';
+import { isRedirectAllowed, parseRedirectAllowlist } from '../src/redirect-allowlist.js';
+import { testEnv, worldName } from './helpers.js';
+
+const DEFAULT_ALLOWLIST = 'https://chatgpt.com/connector_platform_oauth_redirect https://chatgpt.com/connector/oauth/* https://claude.ai/api/mcp/auth_callback';
+
+describe('redirect allowlist', () => {
+  const list = parseRedirectAllowlist(DEFAULT_ALLOWLIST);
+  const withLoopback = parseRedirectAllowlist(`${DEFAULT_ALLOWLIST}, loopback`);
+
+  it('allows the exact and prefix entries', () => {
+    for (const uri of [
+      'https://chatgpt.com/connector_platform_oauth_redirect',
+      'https://chatgpt.com/connector/oauth/abc123',
+      'https://chatgpt.com/connector/oauth/abc-123_x.y~z',
+      'https://chatgpt.com/connector/oauth/a/b',
+      'https://claude.ai/api/mcp/auth_callback',
+    ]) expect(isRedirectAllowed(uri, list), uri).toBe(true);
+  });
+
+  it('refuses lookalike hosts, prefix tricks, ports, queries, fragments, userinfo and non-canonical spellings', () => {
+    for (const uri of [
+      'https://chatgpt.com.evil.com/connector_platform_oauth_redirect',
+      'https://evil.com/?https://chatgpt.com/connector_platform_oauth_redirect',
+      'https://evil.com/https://claude.ai/api/mcp/auth_callback',
+      'https://chatgpt.com@evil.com/connector/oauth/x',
+      'https://user@chatgpt.com/connector/oauth/x',
+      'https://chatgpt.com:443/connector/oauth/x',
+      'https://chatgpt.com:8443/connector/oauth/x',
+      'https://chatgpt.com/connector/oauth',
+      'https://chatgpt.com/connector/oauth/',
+      'https://chatgpt.com/connector/oauthx',
+      'https://chatgpt.com/connector/oauth/x/',
+      'https://chatgpt.com/connector/oauth/x?next=https://evil.com',
+      'https://chatgpt.com/connector/oauth/x#frag',
+      'https://chatgpt.com/connector/oauth/../../evil',
+      'https://chatgpt.com/connector/oauth/%2e%2e/evil',
+      'https://chatgpt.com/connector/oauth/a%2Fb',
+      'https://CHATGPT.com/connector_platform_oauth_redirect',
+      'HTTPS://chatgpt.com/connector_platform_oauth_redirect',
+      'https://chatgpt.com/connector_platform_oauth_redirect/',
+      'https://chatgpt.com/connector_platform_oauth_redirect?x=1',
+      'http://chatgpt.com/connector_platform_oauth_redirect',
+      'https://claude.ai/api/mcp/auth_callback/x',
+      'https://claude.com/api/mcp/auth_callback',
+      ' https://claude.ai/api/mcp/auth_callback',
+      'http://localhost:3000/callback',
+      '',
+    ]) expect(isRedirectAllowed(uri, list), uri).toBe(false);
+    expect(isRedirectAllowed(42, list)).toBe(false);
+  });
+
+  it('loopback allows only http localhost and 127.0.0.1 /callback, optionally one /<id> segment', () => {
+    for (const uri of [
+      'http://localhost:3118/callback',
+      'http://127.0.0.1:52000/callback',
+      'http://localhost/callback',
+      'http://127.0.0.1:1455/callback/abc123',
+    ]) expect(isRedirectAllowed(uri, withLoopback), uri).toBe(true);
+    for (const uri of [
+      'https://localhost:3118/callback',
+      'http://localhost:3118/callbacks',
+      'http://localhost:3118/callback/a/b',
+      'http://localhost:3118/callback/',
+      'http://localhost:3118/callback?x=1',
+      'http://localhost.evil.com:3118/callback',
+      'http://127.0.0.2:3118/callback',
+      'http://[::1]:3118/callback',
+      'http://evil.com/callback',
+      'http://user@localhost:3118/callback',
+    ]) expect(isRedirectAllowed(uri, withLoopback), uri).toBe(false);
+  });
+
+  it('fails closed: unset, empty or invalid entries allow nothing', () => {
+    for (const value of [undefined, '', '  ,  ']) {
+      expect(parseRedirectAllowlist(value)).toEqual([]);
+      expect(isRedirectAllowed('https://claude.ai/api/mcp/auth_callback', parseRedirectAllowlist(value))).toBe(false);
+    }
+    const invalid = parseRedirectAllowlist('http://claude.ai/cb https://x.example:8443/cb https://x.example/cb?q=1 https://x.example/* * https://user@x.example/cb LOOPBACK');
+    expect(invalid).toEqual([]);
+  });
+});
+
+describe('harness mapping', () => {
+  const map = (clientId: string, redirectUri = 'https://example.com/cb') => harnessForClient({ clientId, redirectUri });
+
+  it('maps CIMD client ids, Codex before ChatGPT', () => {
+    expect(map('https://chatgpt.com/oauth/codex/client.json', 'http://127.0.0.1:1455/callback')).toBe('codex');
+    expect(map('https://chatgpt.com/oauth/codex/cb_123/client.json')).toBe('codex');
+    expect(map('https://chatgpt.com/oauth/client.json')).toBe('chatgpt');
+    expect(map('https://chatgpt.com/oauth/cb_123/client.json')).toBe('chatgpt');
+    expect(map('https://claude.ai/oauth/mcp-oauth-client-metadata')).toBe('claude-ai');
+    expect(map('https://claude.ai/oauth/claude-code-client-metadata', 'http://localhost:3118/callback')).toBe('claude');
+  });
+
+  it('maps non-loopback redirect URIs when the client id is not a known CIMD URL', () => {
+    expect(map('dcr-client-1', 'https://chatgpt.com/connector_platform_oauth_redirect')).toBe('chatgpt');
+    expect(map('dcr-client-1', 'https://chatgpt.com/connector/oauth/cb_123')).toBe('chatgpt');
+    expect(map('dcr-client-1', 'https://claude.ai/api/mcp/auth_callback')).toBe('claude-ai');
+  });
+
+  it('gives lookalikes, loopback-only and unknown clients the neutral slug', () => {
+    for (const [clientId, redirectUri] of [
+      ['https://chatgpt.com.evil.com/oauth/client.json', 'https://example.com/cb'],
+      ['https://evil.com/?https://chatgpt.com/oauth/client.json', 'https://example.com/cb'],
+      ['https://evil.com/https://chatgpt.com/oauth/client.json', 'https://example.com/cb'],
+      ['https://chatgpt.com:8443/oauth/client.json', 'https://example.com/cb'],
+      ['https://user@chatgpt.com/oauth/client.json', 'https://example.com/cb'],
+      ['https://chatgpt.com/oauth/client.json?x=1', 'https://example.com/cb'],
+      ['https://chatgpt.com/oauth/a/b/client.json', 'https://example.com/cb'],
+      ['http://chatgpt.com/oauth/client.json', 'https://example.com/cb'],
+      ['https://claude.ai/oauth/mcp-oauth-client-metadata/x', 'https://example.com/cb'],
+      ['dcr-client-1', 'https://chatgpt.com.evil.com/connector_platform_oauth_redirect'],
+      ['dcr-client-1', 'https://evil.com/?https://claude.ai/api/mcp/auth_callback'],
+      ['dcr-client-1', 'https://claude.ai/api/mcp/auth_callback?x=1'],
+      ['dcr-client-1', 'https://chatgpt.com/connector/oauth'],
+      ['dcr-client-1', 'http://localhost:3118/callback'],
+      ['dcr-client-1', 'http://127.0.0.1:1455/callback'],
+      ['ChatGPT', 'https://example.com/cb'],
+    ] as const) expect(harnessForClient({ clientId, redirectUri }), `${clientId} ${redirectUri}`).toBe('mcp-client');
+  });
+});
+
+describe('PUBLIC_ORIGIN and lazy provider construction', () => {
+  it('accepts only an exact origin', () => {
+    expect(parsePublicOrigin('https://world.example.com')).toEqual({ ok: true, origin: 'https://world.example.com', host: 'world.example.com' });
+    expect(parsePublicOrigin('http://localhost:8787')).toMatchObject({ ok: true, origin: 'http://localhost:8787' });
+    for (const value of [
+      'https://world.example.com/', 'https://world.example.com/mcp', 'https://World.example.com', 'https://world.example.com:443',
+      'http://world.example.com', 'world.example.com', 'https://user@world.example.com', 'https://world.example.com?x', 'ftp://world.example.com', '',
+    ]) expect(parsePublicOrigin(value).ok, value).toBe(false);
+  });
+
+  it('is off without PUBLIC_ORIGIN or OAUTH_KV, invalid on a malformed origin, on otherwise', () => {
+    const env = testEnv as unknown as Env;
+    expect(resolveOAuth({ ...env, PUBLIC_ORIGIN: undefined })).toEqual({ state: 'off' });
+    expect(resolveOAuth({ ...env, PUBLIC_ORIGIN: '' })).toEqual({ state: 'off' });
+    expect(resolveOAuth({ ...env, OAUTH_KV: undefined })).toEqual({ state: 'off' });
+    expect(resolveOAuth({ ...env, PUBLIC_ORIGIN: 'https://world.example.com/' })).toMatchObject({ state: 'invalid' });
+    const on = resolveOAuth(env);
+    expect(on).toMatchObject({ state: 'on', origin: 'https://world-edge.test' });
+    // Memoized: the same provider for the same origin and allowlist.
+    expect(resolveOAuth(env)).toMatchObject({ state: 'on' });
+    expect((resolveOAuth(env) as { provider: unknown }).provider).toBe((on as { provider: unknown }).provider);
+  });
+
+  async function call(env: Env, path: string, init: RequestInit = {}) {
+    const ctx = createExecutionContext();
+    const response = await worker.fetch(new Request(`https://world-edge.test${path}`, init), env, ctx);
+    await waitOnExecutionContext(ctx);
+    return response;
+  }
+  const mcpInit = (token?: string): RequestInit => ({
+    method: 'POST',
+    headers: {
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
+      'content-type': 'application/json',
+      accept: 'application/json, text/event-stream',
+      'mcp-protocol-version': '2025-06-18',
+    },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'get_world', arguments: { worldId: worldName('off') } } }),
+  });
+
+  it('with OAuth off, the OAuth paths are 404 and /mcp takes bearer tokens as before', async () => {
+    const off = { ...testEnv, PUBLIC_ORIGIN: undefined } as unknown as Env;
+    for (const path of ['/authorize', '/callback', '/token', '/register', '/.well-known/oauth-authorization-server', '/.well-known/oauth-protected-resource', '/.well-known/oauth-protected-resource/mcp']) {
+      expect((await call(off, path)).status, path).toBe(404);
+    }
+    const anonymous = await call(off, '/mcp', mcpInit());
+    expect(anonymous.status).toBe(401);
+    expect(anonymous.headers.get('www-authenticate')).toBe('Bearer realm="world-edge"');
+    expect(await anonymous.json()).toMatchObject({ error: { code: 'UNAUTHENTICATED' } });
+    const bearer = await call(off, '/mcp', mcpInit(testEnv.TEST_TOKENS.claude));
+    expect(bearer.status).toBe(200);
+  });
+
+  it('with a malformed PUBLIC_ORIGIN, /mcp and the OAuth paths fail closed; other routes still work', async () => {
+    const bad = { ...testEnv, PUBLIC_ORIGIN: 'https://world-edge.test/' } as unknown as Env;
+    expect((await call(bad, '/mcp', mcpInit(testEnv.TEST_TOKENS.claude))).status).toBe(500);
+    expect((await call(bad, '/authorize')).status).toBe(500);
+    const agents = await call(bad, `/agents/world-agent/${worldName('bad')}`, { headers: { authorization: `Bearer ${testEnv.TEST_TOKENS.claude}` } });
+    expect(agents.status).toBe(200);
+    expect((await call(bad, '/health')).status).toBe(200);
+  });
+});
+
+describe('principal from the provider-verified context', () => {
+  const oauthProps = { kind: 'oauth', harness: 'chatgpt', actor: 'writer@example.com', sub: 'u1', clientId: 'c1' };
+  const oauthAuth = { token: 't', audience: 'https://world-edge.test/mcp', scope: ['world:read', 'offline_access'], userId: 'u1', clientId: 'c1' };
+
+  it('builds an OAuth principal with the verified scopes only', () => {
+    expect(principalFromVerifiedContext(oauthProps, oauthAuth)).toEqual({ harness: 'chatgpt', actor: 'writer@example.com', via: 'oauth', scopes: ['world:read'] });
+  });
+
+  it('builds a service-token principal only for tokens the provider did not issue', () => {
+    const external = { token: 't', audience: 'https://world-edge.test/mcp', scope: [] };
+    expect(principalFromVerifiedContext({ kind: 'service-token', harness: 'claude', actor: 'claude-test' }, external)).toEqual({ harness: 'claude', actor: 'claude-test', via: 'service-token' });
+    // An issued token's props can never make it a service token.
+    expect(principalFromVerifiedContext({ kind: 'service-token', harness: 'claude', actor: 'x' }, oauthAuth)).toBeNull();
+    // An external token can never become an OAuth principal.
+    expect(principalFromVerifiedContext(oauthProps, external)).toBeNull();
+  });
+
+  it('refuses mismatched or malformed props', () => {
+    expect(principalFromVerifiedContext({ ...oauthProps, clientId: 'other' }, oauthAuth)).toBeNull();
+    expect(principalFromVerifiedContext({ ...oauthProps, harness: 'Not A Slug' }, oauthAuth)).toBeNull();
+    expect(principalFromVerifiedContext({ ...oauthProps, actor: '' }, oauthAuth)).toBeNull();
+    expect(principalFromVerifiedContext(undefined, oauthAuth)).toBeNull();
+    expect(principalFromVerifiedContext(oauthProps, undefined)).toBeNull();
+  });
+});
+
+describe('Access OIDC configuration', () => {
+  const base = testEnv as unknown as Env;
+
+  it('derives the issuer from ACCESS_TOKEN_URL', () => {
+    expect(readAccessOidcConfig(base)).toMatchObject({ ok: true, config: { issuer: 'https://test-team.cloudflareaccess.com/cdn-cgi/access/sso/oidc/test-access-client' } });
+  });
+
+  it('refuses to start without every secret, or with a token URL that does not end in /token', () => {
+    for (const patch of [
+      { ACCESS_CLIENT_ID: undefined },
+      { ACCESS_CLIENT_SECRET: '' },
+      { ACCESS_TOKEN_URL: 'https://test-team.cloudflareaccess.com/cdn-cgi/access/sso/oidc/test-access-client/token/' },
+      { ACCESS_TOKEN_URL: 'https://test-team.cloudflareaccess.com/cdn-cgi/access/sso/oidc/test-access-client' },
+      { ACCESS_TOKEN_URL: 'https://test-team.cloudflareaccess.com/token' },
+      { ACCESS_TOKEN_URL: 'http://test-team.cloudflareaccess.com/cdn-cgi/access/sso/oidc/c/token' },
+      { ACCESS_TOKEN_URL: 'https://test-team.cloudflareaccess.com/cdn-cgi/access/sso/oidc/c/token?x=1' },
+      { ACCESS_JWKS_URL: 'not a url' },
+      { ACCESS_AUTHORIZATION_URL: undefined },
+    ]) expect(readAccessOidcConfig({ ...base, ...patch }).ok, JSON.stringify(patch)).toBe(false);
+  });
+
+  it('the /authorize page refuses to start when the Access config is bad', async () => {
+    const bad = { ...testEnv, ACCESS_TOKEN_URL: 'https://test-team.cloudflareaccess.com/oidc/x' } as unknown as Env;
+    const ctx = createExecutionContext();
+    const response = await worker.fetch(new Request('https://world-edge.test/authorize?client_id=x'), bad, ctx);
+    expect(response.status).toBe(503);
+    expect(response.headers.get('location')).toBeNull();
+  });
+});
+
+describe('tool scopes', () => {
+  it('gate reads on world:read, writes on world:write and propose_canon on world:propose', () => {
+    expect(TOOL_SCOPES).toEqual({
+      get_world: 'world:read', get_region: 'world:read', search: 'world:read',
+      add_node: 'world:write', update_node: 'world:write', link: 'world:write', move: 'world:write',
+      layout_region: 'world:write', import_whiteboard: 'world:write',
+      propose_canon: 'world:propose',
+    });
+  });
+});
+
+describe('createMcpHandler origin options', () => {
+  it('adds the public host to the default Origin allowlist', () => {
+    expect(mcpHostOptions(new URL('https://world.example.com/mcp'), 'world.example.com')).toEqual({
+      allowedOriginHostnames: ['world.example.com', 'localhost', '127.0.0.1', '[::1]'],
+    });
+    expect(mcpHostOptions(new URL('https://world-edge.acct.workers.dev/mcp'), 'world.example.com').allowedOriginHostnames).toContain('world-edge.acct.workers.dev');
+  });
+});
