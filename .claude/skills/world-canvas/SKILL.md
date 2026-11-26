@@ -44,7 +44,7 @@ Limits: title 1 to 300 chars, summary up to 2000, body (markdown) up to 200000, 
 
 ## Versions and conflicts
 
-- Every node and edge has `version`, starting at 1 and going up by 1 on each accepted change. The world has `world.version`, which goes up by 1 on each accepted batch. Write responses include the new world version as `version`.
+- Every node and edge has `version`. Versions come from one world-wide counter: each accepted change takes the next value, so versions only grow, can jump by more than 1, and are never reused (a deleted and recreated id gets a new, higher version). `world.version` is the counter's current value. Always send the `version` you last read as `baseVersion`; never compute it. A batch may change each node or edge at most once. Write responses include the new world version as `version`.
 - Writes to existing entities carry `baseVersion`: the version you last read. If someone changed it since, the call fails with `STALE_VERSION` and gives `expectedVersion` and `actualVersion`.
 - Where `baseVersion` comes from: the `version` field of a node returned by `get_region` (at `card` or `full` level; `cluster` returns per-tile counts, not nodes) or in the `nodes` of your own write's response. `search` hits carry no version.
 - On `STALE_VERSION`: re-read that node with `get_region` (its region, or a small `bounds` box around its position, at `full` level), merge your change into the current content, and retry once with the new `baseVersion`. Do not blindly overwrite another agent's edit. If it fails again, stop and tell the user.
