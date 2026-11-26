@@ -182,8 +182,10 @@ Use `harness` values `claude`, `codex` and `chatgpt` (lowercase slugs, see the s
 
 The MCP URL is `https://world-edge.<account>.workers.dev/mcp`.
 
-- Claude Code: `claude mcp add --transport http starlight-world https://world-edge.<account>.workers.dev/mcp --header "Authorization: Bearer <claude token>"`
-- Codex: in `~/.codex/config.toml`, add `[mcp_servers.starlight-world]` with `url = "https://world-edge.<account>.workers.dev/mcp"` and the Codex token as a bearer token read from an environment variable. The exact key for that has changed between Codex releases, so check the Codex MCP config docs for the installed version (this lane did not verify it).
+Keep each client's token in an environment variable (`WORLD_CANVAS_TOKEN`) and only ever write the variable name into a config file. The full, sourced instructions are in [`docs/world-canvas/connect-agents.md`](../../docs/world-canvas/connect-agents.md) (written by lane L5 on branch `agent/managed/world-agents`).
+
+- Claude Code: add the server to `.mcp.json` by hand with the header `"Authorization": "Bearer ${WORLD_CANVAS_TOKEN}"`, exactly as in the "Project config" example in connect-agents.md, then check the file. Claude Code expands `${WORLD_CANVAS_TOKEN}` when it connects, so the token itself never lands in the file. Do not pass the token to `claude mcp add --header` (with a literal token or a double-quoted `$WORLD_CANVAS_TOKEN`): the CLI then stores the token in plain text in `~/.claude.json` or `.mcp.json`.
+- Codex: in `~/.codex/config.toml`, add `[mcp_servers.starlight-world]` with `url = "https://world-edge.<account>.workers.dev/mcp"` and `bearer_token_env_var = "WORLD_CANVAS_TOKEN"`, as in connect-agents.md. The token stays in the environment.
 - ChatGPT: custom connectors for remote MCP expect OAuth. A static bearer token is not enough there. Options: put the Worker behind Access with an OAuth-capable identity provider and use the Agents SDK `OAuthProvider` pattern (`@cloudflare/workers-oauth-provider`), or run ChatGPT through a bridge that injects the token. This is not built in this lane; see "Not done" in the PR.
 
 ## Not done in this lane
