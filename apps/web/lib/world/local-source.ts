@@ -1,5 +1,5 @@
 import { applyOps as applyGraphOps, boundsIntersect, nodeBounds, parseWorldGraph, regionAt, tileKeysForBounds } from '@starlight-agent-canvas/world';
-import type { NodeKind, OpError, WorldGraph, WorldNode } from '@starlight-agent-canvas/world';
+import type { Actor, CanonProposal, NodeKind, OpError, WorldEdge, WorldGraph, WorldNode } from '@starlight-agent-canvas/world';
 import { TileIndex } from './tile-index';
 import { regionTint } from './tints';
 import {
@@ -43,6 +43,11 @@ export interface LocalWorldSourceOptions {
 export class LocalWorldSource implements WorldSource {
   readonly kind = 'local' as const;
   private graph: WorldGraph;
+  /** Last graph the server confirmed (the whole graph when there is no server). */
+  private confirmed: WorldGraph;
+  /** Batches applied optimistically and still waiting for the server, oldest first. */
+  private pending: PendingBatch[] = [];
+  private proposalLog = new Map<string, CanonProposal>();
   private index: TileIndex;
   private listeners = new Set<(event: WorldEvent) => void>();
   private log: ActivityEntry[] = [];
@@ -50,6 +55,7 @@ export class LocalWorldSource implements WorldSource {
 
   constructor(graph: WorldGraph, private readonly options: LocalWorldSourceOptions = {}) {
     this.graph = graph;
+    this.confirmed = graph;
     this.index = new TileIndex(graph);
     this.log = seedActivity(graph);
   }
@@ -196,16 +202,52 @@ export class LocalWorldSource implements WorldSource {
     }
   }
 
+  /** Canon proposals made through this source that are still proposed in the current graph. */
+  proposals(): CanonProposal[] {
+    return [...this.proposalLog.values()].filter((p) => {
+      const target = p.targetType === 'node' ? this.index.nodesById.get(p.id) : this.graph.edges.find((e) => e.id === p.id);
+      return target?.canon.status === 'proposed';
+    });
+  }
+
+  private recordProposals(list: readonly CanonProposal[] | undefined): void {
+    for (const p of list ?? []) this.proposalLog.set(`${p.targetType}:${p.id}`, p);
+  }
+
+  /**
+   * Shown graph = last server-confirmed graph + every batch still waiting for
+   * the server, replayed in order. A pending batch that no longer applies is
+   * left out; the server will refuse it too.
+   */
+  private rebuild(): void {
+    let graph = this.confirmed;
+    for (const batch of this.pending) {
+      const replay = applyGraphOps(graph, batch.ops, { actor: batch.actor });
+      if (replay.ok) graph = replay.graph;
+    }
+    this.setGraph(graph);
+  }
+
+  /** Adopt a confirmed server state, never one older than the newest already adopted. */
+  private adoptConfirmed(graph: WorldGraph): void {
+    if (graph.world.version >= this.confirmed.world.version) this.confirmed = graph;
+  }
+
   async applyOps(ops: unknown[], harness = this.options.harness ?? 'human'): Promise<OpOutcome> {
-    const before = this.graph;
     const titleOf = (id: string) => this.index.nodesById.get(id)?.title;
     const { summary, targetIds } = describeOps(ops, titleOf);
     const actor = actorFor(harness);
-    const result = applyGraphOps(before, ops, { actor });
+    const result = applyGraphOps(this.graph, ops, { actor });
     if (!result.ok) return { ok: false, error: result.error };
 
-    // Optimistic: show the change now, confirm or roll back below.
-    this.setGraph(result.graph);
+    const changedEvent = (removed = true) => ({
+      type: 'changed' as const,
+      version: this.graph.world.version,
+      nodeIds: result.changed.nodes,
+      edgeIds: result.changed.edges,
+      removedNodeIds: removed ? result.changed.removedNodes : [],
+      removedEdgeIds: removed ? result.changed.removedEdges : [],
+    });
     const entry: ActivityEntry = {
       id: `a${++this.seq}_${Date.now().toString(36)}`,
       harness,
@@ -215,52 +257,91 @@ export class LocalWorldSource implements WorldSource {
       targetIds,
       status: this.options.persistUrl ? 'pending' : 'confirmed',
     };
-    this.emit({
-      type: 'changed',
-      version: result.graph.world.version,
-      nodeIds: result.changed.nodes,
-      edgeIds: result.changed.edges,
-      removedNodeIds: result.changed.removedNodes,
-      removedEdgeIds: result.changed.removedEdges,
-    });
-    this.pushActivity(entry);
 
-    if (this.options.persistUrl) {
-      let error: OpError | null = null;
-      try {
-        const res = await (this.options.fetchImpl ?? fetch)(this.options.persistUrl, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ ops, harness }),
-        });
-        const body = (await res.json().catch(() => null)) as { ok?: boolean; error?: OpError } | null;
-        if (!res.ok || !body?.ok) error = body?.error ?? { code: 'INVALID_OP', message: `Server refused the batch (HTTP ${res.status}).` };
-      } catch (err) {
-        error = { code: 'INVALID_OP', message: `Could not reach the server: ${err instanceof Error ? err.message : String(err)}` };
-      }
-      if (error) {
-        // Roll back only when no newer batch landed on top of this one, then
-        // reconcile with the server so a retry is based on its versions.
-        if (this.graph === result.graph) this.setGraph(before);
-        const fresh = await this.fetchAuthoritative();
-        if (fresh) this.setGraph(fresh);
-        this.emit({
-          type: 'changed',
-          version: this.graph.world.version,
-          nodeIds: result.changed.nodes,
-          edgeIds: result.changed.edges,
-          removedNodeIds: [],
-          removedEdgeIds: [],
-        });
-        this.emit({ type: 'rollback', error });
-        this.pushActivity({ ...entry, status: 'rejected', error: error.message });
-        return { ok: false, error };
-      }
-      this.pushActivity({ ...entry, status: 'confirmed' });
+    if (!this.options.persistUrl) {
+      this.confirmed = result.graph;
+      this.setGraph(result.graph);
+      this.recordProposals(result.proposals);
+      this.emit(changedEvent());
+      this.pushActivity(entry);
+      return { ok: true, version: result.graph.world.version, changed: result.changed, proposals: result.proposals };
     }
 
-    return { ok: true, version: result.graph.world.version, changed: result.changed, proposals: result.proposals };
+    // Optimistic: show the change now, confirm or reconcile below.
+    const batch: PendingBatch = { ops, actor };
+    this.pending.push(batch);
+    this.setGraph(result.graph);
+    this.emit(changedEvent());
+    this.pushActivity(entry);
+
+    let error: OpError | null = null;
+    let confirmed: ConfirmBody | null = null;
+    try {
+      const res = await (this.options.fetchImpl ?? fetch)(this.options.persistUrl, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ ops, harness }),
+      });
+      const body = (await res.json().catch(() => null)) as (ConfirmBody & { ok?: boolean; error?: OpError }) | null;
+      if (!res.ok || !body?.ok) error = body?.error ?? { code: 'INVALID_OP', message: `Server refused the batch (HTTP ${res.status}).` };
+      else confirmed = body;
+    } catch (err) {
+      error = { code: 'INVALID_OP', message: `Could not reach the server: ${err instanceof Error ? err.message : String(err)}` };
+    }
+    this.pending = this.pending.filter((b) => b !== batch);
+
+    if (error) {
+      // Reload the server copy so a retry is based on its versions, but never
+      // adopt a snapshot older than a write the server already confirmed.
+      const fresh = await this.fetchAuthoritative();
+      if (fresh) this.adoptConfirmed(fresh);
+      this.rebuild();
+      this.emit(changedEvent(false));
+      this.emit({ type: 'rollback', error });
+      this.pushActivity({ ...entry, status: 'rejected', error: error.message });
+      return { ok: false, error };
+    }
+
+    // Adopt the server's state for what changed (its versions and stamps).
+    if (confirmed?.world && Array.isArray(confirmed.nodes) && Array.isArray(confirmed.edges) && confirmed.changed) {
+      if (confirmed.world.version >= this.confirmed.world.version) this.confirmed = mergeServerState(this.confirmed, confirmed as Required<ConfirmBody>);
+    } else {
+      const replay = applyGraphOps(this.confirmed, ops, { actor });
+      if (replay.ok) this.confirmed = replay.graph;
+    }
+    this.rebuild();
+    const proposals = confirmed?.proposals ?? result.proposals;
+    this.recordProposals(proposals);
+    this.emit(changedEvent());
+    this.pushActivity({ ...entry, status: 'confirmed' });
+    return { ok: true, version: confirmed?.version ?? result.graph.world.version, changed: result.changed, proposals };
   }
+}
+
+interface PendingBatch {
+  ops: unknown[];
+  actor: Actor;
+}
+
+/** Success body of `POST /api/worlds/[worldId]/ops`. Older servers send only version, changed and proposals. */
+interface ConfirmBody {
+  version?: number;
+  changed?: { nodes: string[]; edges: string[]; removedNodes: string[]; removedEdges: string[] };
+  proposals?: CanonProposal[];
+  world?: WorldGraph['world'];
+  nodes?: WorldNode[];
+  edges?: WorldEdge[];
+}
+
+/** `base` with the server's copies of changed nodes and edges, and its world record. */
+function mergeServerState(base: WorldGraph, body: Required<ConfirmBody>): WorldGraph {
+  const nodes = new Map(base.nodes.map((n) => [n.id, n]));
+  const edges = new Map(base.edges.map((e) => [e.id, e]));
+  for (const id of body.changed.removedNodes) nodes.delete(id);
+  for (const id of body.changed.removedEdges) edges.delete(id);
+  for (const n of body.nodes) nodes.set(n.id, n);
+  for (const e of body.edges) edges.set(e.id, e);
+  return { ...base, world: body.world, nodes: [...nodes.values()], edges: [...edges.values()] };
 }
 
 /** One activity line per harness that created nodes, from `createdBy`. */
