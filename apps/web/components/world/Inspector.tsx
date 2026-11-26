@@ -152,7 +152,7 @@ export const Inspector = forwardRef<HTMLInputElement, InspectorProps>(function I
             <h4 id="canon-heading">Canon</h4>
             {node.canon.status === 'draft' ? (
               <>
-                <p className="wc-muted">Canon lives in git. Proposing marks this node proposed and opens a canon PR through the world service; it never sets canon here.</p>
+                <p className="wc-muted">Canon lives in git. Proposing marks this node proposed and queues it for a canon PR, which a separate git flow opens for human review; it never sets canon here.</p>
                 <label className="wc-field">
                   <span>Why it belongs in canon</span>
                   <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} maxLength={2000} />
