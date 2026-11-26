@@ -2,7 +2,7 @@
 
 Cloudflare Worker for the World Canvas (issue #63, lane L2). One Durable Object per world holds the World Graph from `@starlight-agent-canvas/world`, applies GraphOps through its `applyOps`, keeps an append-only ops log, and broadcasts diffs to every connected browser and agent. The same Worker serves an MCP endpoint at `/mcp` so Claude, Codex and ChatGPT edit the same graph. Claude Code and Codex connect with a static bearer service token. ChatGPT and claude.ai custom connectors connect with OAuth 2.1: the Worker is its own authorization server and signs people in through Cloudflare Access for SaaS (OIDC).
 
-Nothing in this directory deploys itself. The first deploy, the Cloudflare Access policy and any custom domain are Frank's decision.
+Nothing in this directory deploys itself. The first deploy, the Cloudflare Access policy and any custom domain are Frank's decision. The step-by-step setup guide, with checks after each step, is [`docs/world-canvas/oauth-setup.md`](../../docs/world-canvas/oauth-setup.md).
 
 ## Architecture
 
@@ -91,7 +91,7 @@ Canon is never written here. `applyOps` refuses `canon` in any op, `importGraph`
 | `MCP_SERVICE_TOKENS` | secret | JSON array of `{name, harness, sha256}` for MCP clients | for MCP |
 | `MEDIA_SIGNING_KEY` | secret | HMAC key for signed upload URLs | for uploads |
 | `OAUTH_KV` | KV namespace | OAuth provider storage: clients, grants, hashed tokens, consent and sign-in transactions | for OAuth |
-| `PUBLIC_ORIGIN` | var | Public origin of the Worker, e.g. `https://world.example.com` (https, no path, no trailing slash; http only on localhost). It is the OAuth issuer, and the MCP resource is `<PUBLIC_ORIGIN>/mcp` | for OAuth |
+| `PUBLIC_ORIGIN` | var | Public origin of the Worker, e.g. `https://world.example.com`: https, lowercase host, no port, no path, no trailing slash, nothing else (http only on `localhost`, `127.0.0.1` or `[::1]`, for local dev). It is the OAuth issuer, and the MCP resource is `<PUBLIC_ORIGIN>/mcp` | for OAuth |
 | `OAUTH_REDIRECT_ALLOWLIST` | var | Redirect URIs that may receive an authorization code (see below) | for OAuth |
 | `ACCESS_CLIENT_ID` | secret | Client ID of the Access for SaaS (OIDC) application | for OAuth |
 | `ACCESS_CLIENT_SECRET` | secret | Client secret of that application | for OAuth |
@@ -99,13 +99,13 @@ Canon is never written here. `applyOps` refuses `canon` in any op, `importGraph`
 | `ACCESS_AUTHORIZATION_URL` | secret | Its authorization endpoint (`.../authorization`) | for OAuth |
 | `ACCESS_JWKS_URL` | secret | Its key endpoint (`.../jwks`) | for OAuth |
 
-`wrangler.jsonc` sets `workers_dev: true` and `preview_urls: false`, and the compatibility flags `nodejs_compat` and `global_fetch_strictly_public` (the OAuth library needs the second to fetch client metadata documents). The D1 id, KV id, bucket name, index name and `PUBLIC_ORIGIN` are placeholders. `secrets.required` lists every secret above, so `wrangler deploy` fails until all of them are set, and `wrangler dev` reads only those names from `.dev.vars`. No `COOKIE_ENCRYPTION_KEY` is needed: the library's consent and sign-in helpers keep their own state in `OAUTH_KV` with browser-bound cookies.
+`wrangler.jsonc` sets `workers_dev: true` and `preview_urls: false`, and the compatibility flags `nodejs_compat` and `global_fetch_strictly_public` (the OAuth library needs the second to fetch client metadata documents). The D1 id, KV id, bucket name, index name, `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD` and `PUBLIC_ORIGIN` are placeholders. `secrets.required` lists every secret above, so `wrangler deploy` fails until all of them are set, and `wrangler dev` reads only those names from `.dev.vars`. No `COOKIE_ENCRYPTION_KEY` is needed: the library's consent and sign-in helpers keep their own state in `OAUTH_KV` with browser-bound cookies.
 
 OAuth is on only when `PUBLIC_ORIGIN` and `OAUTH_KV` are both set. With `PUBLIC_ORIGIN` unset or empty, the OAuth routes answer 404 and `/mcp` takes service tokens only, as before. A `PUBLIC_ORIGIN` that is set but is not exactly an origin makes `/mcp` and the OAuth routes answer 500 (`OAUTH_MISCONFIGURED`); the placeholder value does that on purpose.
 
 Because of `secrets.required`, the five `ACCESS_*` secrets must exist before `wrangler deploy` succeeds, even with OAuth off. With OAuth off any placeholder value works: the Worker reads them only in `/authorize` and `/callback`, which exist only with OAuth on.
 
-Token lifetimes: an access token lasts 1 hour (`accessTokenTTL` 3600). A grant, and so its refresh tokens, ends 7 days after sign-in (`refreshTokenTTL` 604800); refreshing does not extend it. Access is consulted only at sign-in, so someone removed from the Access policy keeps access for at most 7 days. To cut that short, revoke their grants (the provider's `listUserGrants` and `revokeGrant` helpers; there is no admin route yet). Authorization codes, consent pages and sign-in transactions expire after 10 minutes. Dynamically registered clients expire after 90 days unless used.
+Token lifetimes: an access token lasts 1 hour (`accessTokenTTL` 3600). A grant, and so its refresh tokens, ends 7 days after the client exchanges the code, a moment after sign-in (`refreshTokenTTL` 604800); refreshing does not extend it. Access is consulted only at sign-in, so someone removed from the Access policy keeps access for at most 7 days. The token response carries a refresh token whether or not the client asks for `offline_access` (this Worker does not advertise that scope). Whether ChatGPT and claude.ai use the refresh token is unverified; if one of them asks the user to sign in again about every hour, that is why. To cut that short, revoke their grants (the provider's `listUserGrants` and `revokeGrant` helpers; there is no admin route yet). Authorization codes, consent pages and sign-in transactions expire after 10 minutes. Dynamically registered clients expire after 90 days unless used.
 
 With OAuth on, `/mcp` works only at `PUBLIC_ORIGIN`: every token, service tokens included, is bound to the resource `<PUBLIC_ORIGIN>/mcp`, and a request on another host (such as the `workers.dev` name) gets 401. Point Claude Code and Codex at the same URL.
 
@@ -165,6 +165,8 @@ The actor is the email from the Access id_token, the same as on the browser path
 
 The harness records which client identity the provider validated: the client metadata document URL (`client_id`) or the allowlisted redirect URI, computed when the code is issued (`src/harness.ts`). It cannot be set through self-asserted fields (`client_name`, tool arguments, headers). It is attribution for normal use, not a security boundary. ChatGPT and claude.ai are public clients, so anyone who may sign in through Access can register a client with their redirect URI (or present their published `client_id`), finish the flow in their own browser, read the code from the redirect and redeem it with their own PKCE verifier, and get a token labelled `chatgpt` or `claude-ai`. The authenticated identity is the actor, the Access email.
 
+`claude-ai` and `mcp-client` are new harness slugs. The follow-up spec (R1.4) maps claude.ai to `claude`, and `docs/world-canvas/spec.md` lists the known harnesses without either slug. This branch separates claude.ai connectors (`claude-ai`) from Claude Code (`claude`) on purpose, so the list in spec.md needs updating before anything depends on it.
+
 | Client | Harness |
 | --- | --- |
 | client_id `https://chatgpt.com/oauth/codex/client.json` or `https://chatgpt.com/oauth/codex/<id>/client.json` | `codex` |
@@ -177,9 +179,10 @@ The harness records which client identity the provider validated: the client met
 
 ## Local dev
 
+Prerequisites, once: run `pnpm install` from the repository root. Every command in this section runs from the repository root.
+
 ```bash
-pnpm install
-pnpm world-edge:test          # builds packages/world, then runs the Workers test suite
+pnpm world-edge:test          # builds packages/world, then runs the Workers test suite (fully offline)
 pnpm world-edge:dry-run       # bundles with wrangler, no upload
 ```
 
@@ -190,18 +193,21 @@ TOKEN=$(openssl rand -hex 24)
 HASH=$(printf %s "$TOKEN" | sha256sum | cut -d' ' -f1)
 printf 'MCP_SERVICE_TOKENS=[{"name":"local","harness":"claude","sha256":"%s"}]\nMEDIA_SIGNING_KEY=%s\n' "$HASH" "$(openssl rand -hex 32)" > apps/world-edge/.dev.vars
 pnpm --filter @starlight-agent-canvas/world-edge exec wrangler d1 migrations apply world-index --local
-pnpm --filter @starlight-agent-canvas/world build
-pnpm --filter @starlight-agent-canvas/world-edge exec wrangler dev --var PUBLIC_ORIGIN:
+pnpm world-edge:dev --var PUBLIC_ORIGIN:
 # then: Authorization: Bearer $TOKEN against http://localhost:8787/mcp
 ```
 
-`--var PUBLIC_ORIGIN:` sets `PUBLIC_ORIGIN` to the empty string, which turns OAuth off locally; without it the placeholder in `wrangler.jsonc` makes `/mcp` answer 500. The same applies to `pnpm world-edge:dev`: run it as `pnpm world-edge:dev --var PUBLIC_ORIGIN:` (or with a real origin); the extra arguments reach `wrangler dev`. Because `wrangler.jsonc` lists `secrets.required`, `wrangler dev` reads only those names from `.dev.vars` and warns about the Access secrets you did not set. To try OAuth locally, pass `--var PUBLIC_ORIGIN:http://localhost:8787` and put the five `ACCESS_*` values of an Access for SaaS app whose redirect URL is `http://localhost:8787/callback` in `.dev.vars`.
+`pnpm world-edge:dev` builds `packages/world` and runs `wrangler dev`; extra arguments reach `wrangler dev`. It needs `--var PUBLIC_ORIGIN:` (or a real origin): that sets `PUBLIC_ORIGIN` to the empty string, which turns OAuth off locally, and without it the placeholder in `wrangler.jsonc` makes `/mcp` answer 500. Because `wrangler.jsonc` lists `secrets.required`, `wrangler dev` reads only those names from `.dev.vars` and warns about the Access secrets you did not set.
 
-Locally, Workers AI and Vectorize are not emulated, so search uses D1 (or the DO) text matching.
+`wrangler dev` connects the `AI` binding to your Cloudflare account, so it needs `npx wrangler login` (or `CLOUDFLARE_API_TOKEN` in the shell), and Workers AI use is billed. Vectorize is not available locally, so search falls back to D1 (or the DO) text matching. To work fully offline, use `pnpm world-edge:test`, or run `wrangler dev -c <copy>` with a copy of `wrangler.jsonc` without the `ai` binding.
+
+To try OAuth locally, use a separate Access for SaaS app made only for local testing, with redirect URL `http://localhost:8787/callback`. Put its five `ACCESS_*` values in `.dev.vars`, run `pnpm world-edge:dev --var PUBLIC_ORIGIN:http://localhost:8787`, and delete `.dev.vars` afterwards. Unverified: whether Access accepts an `http://localhost` redirect URL, and whether browsers keep the library's `__Host-` cookies (which are `Secure`) on `http://localhost`. If either fails, the local try-out cannot complete; the test suite covers the flow.
 
 ## DEPLOY
 
-Frank runs these. Nothing here has been run by an agent, and no Cloudflare resources exist yet.
+Frank runs these. Nothing here has been run by an agent, and no Cloudflare resources exist yet. The same steps with a check after each one, and what is verified and what is not, are in [`docs/world-canvas/oauth-setup.md`](../../docs/world-canvas/oauth-setup.md); follow that guide for the first setup.
+
+Prerequisites, once: from the repository root run `pnpm install`, then `npx wrangler login` (or set `CLOUDFLARE_API_TOKEN` in the shell) before any wrangler command. Steps 1 to 5 run in `apps/world-edge`; step 7 runs from the repository root.
 
 ```bash
 cd apps/world-edge
@@ -238,13 +244,17 @@ npx wrangler secret put ACCESS_TOKEN_URL
 npx wrangler secret put ACCESS_AUTHORIZATION_URL
 npx wrangler secret put ACCESS_JWKS_URL
 
-# 6. Set PUBLIC_ORIGIN in wrangler.jsonc to the custom domain's origin, and
-#    check OAUTH_REDIRECT_ALLOWLIST against the redirect URI ChatGPT shows on
-#    the connector's page.
+# 6. Custom domain. In wrangler.jsonc add
+#      "routes": [{ "pattern": "<host>", "custom_domain": true }]
+#    and set PUBLIC_ORIGIN to "https://<host>". Check OAUTH_REDIRECT_ALLOWLIST
+#    against the redirect URI ChatGPT shows on the connector's page.
 
-# 7. Deploy (first deploy is Frank's call)
-npx wrangler deploy --dry-run --outdir dist   # check bindings
-npx wrangler deploy
+# 7. From the repository root. Both scripts build packages/world first; a
+#    plain `npx wrangler deploy` in apps/world-edge does not, and on a fresh
+#    checkout fails with: Could not resolve "@starlight-agent-canvas/world".
+cd ../..
+pnpm world-edge:dry-run    # bundles and lists the bindings, no upload
+pnpm world-edge:deploy     # the deploy itself: Frank's call
 ```
 
 ### Where Access may sit
@@ -272,8 +282,8 @@ The MCP URL is `<PUBLIC_ORIGIN>/mcp` (with OAuth off, `https://world-edge.<accou
 
 Keep each client's token in an environment variable (`WORLD_CANVAS_TOKEN`) and only ever write the variable name into a config file. The full, sourced instructions are in [`docs/world-canvas/connect-agents.md`](../../docs/world-canvas/connect-agents.md) (written by lane L5 on branch `agent/managed/world-agents`).
 
-- Claude Code: add the server to `.mcp.json` by hand with the header `"Authorization": "Bearer ${WORLD_CANVAS_TOKEN}"`, exactly as in the "Project config" example in connect-agents.md, then check the file. Claude Code expands `${WORLD_CANVAS_TOKEN}` when it connects, so the token itself never lands in the file. Do not pass the token to `claude mcp add --header` (with a literal token or a double-quoted `$WORLD_CANVAS_TOKEN`): the CLI then stores the token in plain text in `~/.claude.json` or `.mcp.json`.
-- Codex: in `~/.codex/config.toml`, add `[mcp_servers.starlight-world]` with `url = "<PUBLIC_ORIGIN>/mcp"` and `bearer_token_env_var = "WORLD_CANVAS_TOKEN"`, as in connect-agents.md. The token stays in the environment.
+- Claude Code: add the server to `.mcp.json` by hand with the header `"Authorization": "Bearer ${WORLD_CANVAS_TOKEN}"`, as in the "Project config" example in connect-agents.md, but set `url` to `<PUBLIC_ORIGIN>/mcp`, not the `workers.dev` default shown there: with OAuth on, the `workers.dev` name answers 401 for every token. Then check the file. Claude Code expands `${WORLD_CANVAS_TOKEN}` when it connects, so the token itself never lands in the file. Do not pass the token to `claude mcp add --header` (with a literal token or a double-quoted `$WORLD_CANVAS_TOKEN`): the CLI then stores the token in plain text in `~/.claude.json` or `.mcp.json`.
+- Codex: in `~/.codex/config.toml`, add `[mcp_servers.starlight-world]` with `url = "<PUBLIC_ORIGIN>/mcp"` (not the `workers.dev` URL in connect-agents.md, for the same reason) and `bearer_token_env_var = "WORLD_CANVAS_TOKEN"`. The token stays in the environment.
 - ChatGPT: add a custom MCP server with the URL `<PUBLIC_ORIGIN>/mcp` and OAuth. ChatGPT finds the metadata from the 401, uses its client metadata document (`https://chatgpt.com/oauth/client.json`) or registers itself, shows our consent page, and signs the user in through Access. Its writes are recorded as harness `chatgpt` with the Access email as actor. The redirect URI ChatGPT shows on the connector's page must be on `OAUTH_REDIRECT_ALLOWLIST`.
 - claude.ai and Claude Desktop: add a custom connector with the URL `<PUBLIC_ORIGIN>/mcp`. Either client option works (Claude's published identity or automatic registration); writes are recorded as harness `claude-ai`.
 

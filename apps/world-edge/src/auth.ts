@@ -102,13 +102,14 @@ interface Jwk extends JsonWebKey {
   kid?: string;
 }
 
-/**
- * One cache entry per JWKS URL, so the two Access key sets never evict each
- * other. `forcedAt` is when an unknown kid last forced a refetch.
- */
-const jwksCache = new Map<string, { keys: Jwk[]; fetchedAt: number; forcedAt: number }>();
+/** One cache entry per JWKS URL, so the two Access key sets never evict each other. */
+const jwksCache = new Map<string, { keys: Jwk[]; fetchedAt: number }>();
+/** The fetch currently running for a JWKS URL; concurrent callers share it (single-flight). */
+const jwksInFlight = new Map<string, Promise<Jwk[]>>();
+/** When an unknown kid last started a forced refetch of a JWKS URL, successful or not. */
+const jwksForcedAt = new Map<string, number>();
 const JWKS_TTL_MS = 10 * 60 * 1000;
-/** At most one refetch per JWKS URL in this window because of an unknown kid. */
+/** At most one forced refetch per JWKS URL in this window because of an unknown kid. */
 const JWKS_FORCED_REFRESH_MS = 30 * 1000;
 
 export type JwksFetcher = (url: string) => Promise<{ keys: Jwk[] }>;
@@ -152,31 +153,50 @@ async function fetchKeys(url: string, fetcher: JwksFetcher): Promise<Jwk[]> {
   return Array.isArray(result?.keys) ? result.keys : [];
 }
 
+/**
+ * Fetch the keys for `url` and cache them. If a fetch for `url` is already
+ * running, wait for that one instead of starting another.
+ */
+function fetchKeysOnce(url: string, fetcher: JwksFetcher, now: number): Promise<Jwk[]> {
+  const running = jwksInFlight.get(url);
+  if (running) return running;
+  const fetching = fetchKeys(url, fetcher)
+    .then((keys) => {
+      jwksCache.set(url, { keys, fetchedAt: now });
+      return keys;
+    })
+    .finally(() => jwksInFlight.delete(url));
+  jwksInFlight.set(url, fetching);
+  return fetching;
+}
+
 /** Cached keys for `url`, fetched when missing or older than the TTL. */
 async function loadKeys(url: string, fetcher: JwksFetcher, now: number): Promise<Jwk[]> {
   const cached = jwksCache.get(url);
   if (cached && now - cached.fetchedAt < JWKS_TTL_MS) return cached.keys;
-  const keys = await fetchKeys(url, fetcher);
-  jwksCache.set(url, { keys, fetchedAt: now, forcedAt: cached?.forcedAt ?? 0 });
-  return keys;
+  return fetchKeysOnce(url, fetcher, now);
 }
 
 /**
  * Refetch because a token named a kid the cache does not have (key rotation).
  * Rate limited per URL, so tokens with made-up kids cannot make every request
- * refetch. Returns null when a forced refetch happened too recently.
+ * refetch: concurrent callers share one fetch, and the 30 s window starts when
+ * a forced fetch begins, so a failed one counts too. Returns null when a
+ * forced refetch started too recently.
  */
 async function refreshKeysForUnknownKid(url: string, fetcher: JwksFetcher, now: number): Promise<Jwk[] | null> {
-  const cached = jwksCache.get(url);
-  if (cached && now - cached.forcedAt < JWKS_FORCED_REFRESH_MS) return null;
-  const keys = await fetchKeys(url, fetcher);
-  jwksCache.set(url, { keys, fetchedAt: now, forcedAt: now });
-  return keys;
+  const running = jwksInFlight.get(url);
+  if (running) return running;
+  if (now - (jwksForcedAt.get(url) ?? -Infinity) < JWKS_FORCED_REFRESH_MS) return null;
+  jwksForcedAt.set(url, now);
+  return fetchKeysOnce(url, fetcher, now);
 }
 
 /** Test hook. */
 export function resetJwksCache(): void {
   jwksCache.clear();
+  jwksInFlight.clear();
+  jwksForcedAt.clear();
 }
 
 export interface Rs256JwtOptions {
