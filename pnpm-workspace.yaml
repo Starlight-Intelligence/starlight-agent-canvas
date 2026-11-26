@@ -18,5 +18,9 @@ overrides:
   '@hono/node-server@1': '^1.19.15'
   ip-address: '^10.4.0'
 allowBuilds:
+  # Optional postinstall banner pulled in through agents; not needed.
+  core-js-pure: false
   esbuild: true
   sharp: true
+  # workerd is the local Workers runtime used by wrangler dev and @cloudflare/vitest-plugin.
+  workerd: true
