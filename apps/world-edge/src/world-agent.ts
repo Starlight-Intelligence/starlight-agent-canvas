@@ -88,7 +88,10 @@ export type RegionResult =
     clusters: ClusterSummary[];
     nodes: (WorldNode | NodeCard)[];
     edges: (WorldEdge | EdgeSummary)[];
+    /** True when either list was cut; see nodesTruncated and edgesTruncated. */
     truncated: boolean;
+    nodesTruncated: boolean;
+    edgesTruncated: boolean;
   }
   | { ok: false; version: number; error: { code: string; message: string } };
 
@@ -197,6 +200,8 @@ export class WorldAgent extends Agent<Env, WorldSummaryState> {
         nodes: [],
         edges: [],
         truncated: false,
+        nodesTruncated: false,
+        edgesTruncated: false,
       };
     }
 
@@ -204,7 +209,9 @@ export class WorldAgent extends Agent<Env, WorldSummaryState> {
     const rows = store.nodesInTiles(tiles, bounds, { regionId: regionFilter, limit: limit + 1, kinds: query.kinds });
     const truncated = rows.length > limit;
     const nodes = truncated ? rows.slice(0, limit) : rows;
-    const edges = store.edgesTouching(nodes.map((n) => n.id), REGION_LIMITS.maxEdges);
+    const edgeRows = store.edgesTouching(nodes.map((n) => n.id), REGION_LIMITS.maxEdges + 1);
+    const edgesTruncated = edgeRows.length > REGION_LIMITS.maxEdges;
+    const edges = edgesTruncated ? edgeRows.slice(0, REGION_LIMITS.maxEdges) : edgeRows;
     return {
       ok: true,
       version: world.version,
@@ -214,7 +221,9 @@ export class WorldAgent extends Agent<Env, WorldSummaryState> {
       clusters: [],
       nodes: level === 'full' ? nodes : nodes.map(toCard),
       edges: projectEdges(edges, level),
-      truncated,
+      truncated: truncated || edgesTruncated,
+      nodesTruncated: truncated,
+      edgesTruncated,
     };
   }
 

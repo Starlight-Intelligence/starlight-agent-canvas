@@ -42,8 +42,9 @@ export function resolveLevel(query: Pick<RegionQuery, 'level' | 'zoom'>): Semant
 /**
  * Tiles to read for a viewport. Nodes belong to the tile of their top-left
  * position, so a node that starts left of or above the viewport can still
- * overlap it. Padding one tile on those sides catches it (nodes larger than
- * a tile are rare and are still caught when their origin tile is in view).
+ * overlap it. Padding one tile on those sides catches every node up to one
+ * tile wide and tall; larger nodes come from a separate indexed path in
+ * WorldStore.nodesInTiles.
  */
 export function queryTiles(bounds: Bounds): string[] {
   return tileKeysForBounds({ x: bounds.x - TILE_SIZE, y: bounds.y - TILE_SIZE, w: bounds.w + TILE_SIZE, h: bounds.h + TILE_SIZE });

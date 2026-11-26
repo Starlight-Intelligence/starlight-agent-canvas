@@ -66,6 +66,22 @@ describe('get_region', () => {
     }
   });
 
+  it('finds a node wider than a tile whose origin is several tiles away', async () => {
+    const agent = await agentFor(worldName('wide'));
+    await agent.applyBatch([nodeOp('n_wide', 0, 0, { size: { w: 6000, h: 100 } }), nodeOp('n_small', 5050, 50)], claude);
+    const result = await agent.getRegion({ bounds: { x: 5000, y: 0, w: 100, h: 100 }, level: 'card' });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.nodes.map((n) => n.id).sort()).toEqual(['n_small', 'n_wide']);
+    const outside = await agent.getRegion({ bounds: { x: 6100, y: 0, w: 100, h: 100 }, level: 'card' });
+    if (outside.ok) expect(outside.nodes).toEqual([]);
+  });
+
+  it('reports edge truncation separately from node truncation', async () => {
+    const agent = await seeded();
+    const result = await agent.getRegion({ bounds: { x: 0, y: 0, w: 9999, h: 9999 }, level: 'card', limit: 7 });
+    expect(result.ok && [result.truncated, result.nodesTruncated, result.edgesTruncated]).toEqual([true, true, false]);
+  });
+
   it('refuses bounds that would read too many tiles', async () => {
     const agent = await seeded();
     const result = await agent.getRegion({ bounds: { x: 0, y: 0, w: 2048 * 64, h: 2048 * 64 }, level: 'card' });
