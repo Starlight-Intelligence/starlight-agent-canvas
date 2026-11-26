@@ -33,12 +33,16 @@ export function isAllowedOrigin(origin: string, env: Record<string, string | und
 }
 
 /**
- * True when a state-changing request must be refused: a cross-site fetch, or an
- * Origin header that is not allowed. A request without an Origin header (curl,
- * server-to-server) is not a browser cross-origin write and passes.
+ * True when a state-changing request must be refused: an Origin header that is
+ * not allowed, or a browser-signalled fetch that is not same-origin.
+ * A request with neither Origin nor Sec-Fetch-Site (curl, MCP clients) is a
+ * non-browser local client and passes. Browsers always send Sec-Fetch-Site, so
+ * when it is present it must be `same-origin` (or `none`, a user-initiated
+ * navigation); `same-site`, `cross-site` and unknown values are refused.
  */
 export function originDenied(request: Request, env: Record<string, string | undefined> = process.env): boolean {
-  if (request.headers.get('sec-fetch-site') === 'cross-site') return true;
+  const site = request.headers.get('sec-fetch-site');
+  if (site !== null && site !== 'same-origin' && site !== 'none') return true;
   const origin = request.headers.get('origin');
   return origin !== null && origin !== '' && !isAllowedOrigin(origin, env);
 }

@@ -9,6 +9,8 @@ export async function GET(_request: Request, context: { params: Promise<{ worldI
     return NextResponse.json(await readWorld(worldId));
   } catch (error) {
     if (error instanceof WorldNotFoundError) return NextResponse.json({ error: error.message }, { status: 404 });
-    return NextResponse.json({ error: `World ${worldId} could not be read: ${error instanceof Error ? error.message : String(error)}` }, { status: 500 });
+    // Detail (file paths, parse errors) stays in the server log, not the response.
+    console.error(`World ${worldId} could not be read:`, error);
+    return NextResponse.json({ error: 'World could not be read.' }, { status: 500 });
   }
 }

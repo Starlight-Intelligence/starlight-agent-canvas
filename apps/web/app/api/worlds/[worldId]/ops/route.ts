@@ -1,8 +1,15 @@
 import { NextResponse } from 'next/server';
+import { LIMITS } from '@starlight-agent-canvas/world';
 import { originDenied } from '@/lib/request-origin';
 import { applyWorldOps, WorldNotFoundError } from '@/lib/world/world-files';
 
 export const dynamic = 'force-dynamic';
+
+/** Largest accepted request body. A full batch of LIMITS.opsPerBatchMax ops is far below this. */
+const MAX_BODY_BYTES = 256 * 1024;
+
+const tooLarge = (message: string) =>
+  NextResponse.json({ ok: false, error: { code: 'INVALID_OP', message } }, { status: 413 });
 
 /**
  * Applies a GraphOp batch to the local world. The browser has no authenticated
@@ -21,10 +28,20 @@ export async function POST(request: Request, context: { params: Promise<{ worldI
   if (!request.headers.get('content-type')?.toLowerCase().startsWith('application/json')) {
     return NextResponse.json({ ok: false, error: { code: 'INVALID_OP', message: 'World edits must be sent as application/json.' } }, { status: 415 });
   }
-  const body = (await request.json().catch(() => null)) as { ops?: unknown } | null;
+  const declared = Number(request.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) return tooLarge('World edit body exceeds 256 KB.');
+  const text = await request.text();
+  if (new TextEncoder().encode(text).byteLength > MAX_BODY_BYTES) return tooLarge('World edit body exceeds 256 KB.');
+  let body: { ops?: unknown } | null = null;
+  try {
+    body = JSON.parse(text) as { ops?: unknown } | null;
+  } catch {
+    body = null;
+  }
   if (!body || !Array.isArray(body.ops)) {
     return NextResponse.json({ ok: false, error: { code: 'INVALID_OP', message: 'Body must be { ops: GraphOp[] }.' } }, { status: 400 });
   }
+  if (body.ops.length > LIMITS.opsPerBatchMax) return tooLarge(`A batch may contain at most ${LIMITS.opsPerBatchMax} ops.`);
   try {
     const result = await applyWorldOps(worldId, body.ops, 'human');
     if (!result.ok) return NextResponse.json({ ok: false, error: result.error }, { status: 409 });

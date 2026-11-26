@@ -40,4 +40,11 @@ describe('originDenied', () => {
     expect(originDenied(req({ origin: 'http://localhost:3000', 'sec-fetch-site': 'same-origin' }), {})).toBe(false);
     expect(originDenied(req({}), {})).toBe(false);
   });
+  it('allows header-less non-browser clients but denies absent Origin with a non-same-origin sec-fetch-site', () => {
+    expect(originDenied(req({ 'sec-fetch-site': 'none' }), {})).toBe(false);
+    expect(originDenied(req({ 'sec-fetch-site': 'same-origin' }), {})).toBe(false);
+    expect(originDenied(req({ 'sec-fetch-site': 'same-site' }), {})).toBe(true);
+    expect(originDenied(req({ 'sec-fetch-site': 'cross-site' }), {})).toBe(true);
+    expect(originDenied(req({ 'sec-fetch-site': 'bogus' }), {})).toBe(true);
+  });
 });
