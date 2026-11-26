@@ -113,3 +113,34 @@ describe('removeNode loads every incident edge', () => {
     expect((await agent.getWorldInfo()).counts.edges).toBe(0);
   });
 });
+
+describe('versions are never reused across delete and recreate (#64 Codex block)', () => {
+  it('a stale edit aimed at a removed node cannot hit its replacement', async () => {
+    const agent = await agentFor(worldName('reuse'));
+    await agent.applyBatch([nodeOp('n_a')], claude);
+    expect((await agent.applyBatch([{ op: 'removeNode', id: 'n_a', baseVersion: 1 }], claude)).ok).toBe(true);
+    const recreated = (await agent.applyBatch([nodeOp('n_a')], claude)) as WriteResult;
+    expect(recreated.ok).toBe(true);
+    if (!recreated.ok) return;
+    expect(recreated.nodes[0]!.version).toBeGreaterThan(1);
+    const stale = (await agent.applyBatch([{ op: 'updateNode', id: 'n_a', baseVersion: 1, patch: { title: 'stale' } }], claude)) as WriteResult;
+    expect(stale.ok).toBe(false);
+    if (!stale.ok) expect(stale.error.code).toBe('STALE_VERSION');
+  });
+
+  it('import starts the world counter at or above the highest imported version', async () => {
+    const worldId = worldName('import-floor');
+    const agent = await agentFor(worldId);
+    const graph = {
+      schemaVersion: WORLD_GRAPH_SCHEMA_VERSION,
+      world: { id: worldId, title: 'Floor', summary: '', version: 1, regions: [], updatedAt: '2026-11-25T00:00:00.000Z' },
+      nodes: [{ ...node('n_old', 7), worldId }],
+      edges: [],
+    };
+    const imported = (await agent.importGraph(graph, claude)) as WriteResult;
+    expect(imported.ok).toBe(true);
+    expect((await agent.getWorldInfo()).world.version).toBeGreaterThanOrEqual(7);
+    const added = (await agent.applyBatch([nodeOp('n_new')], claude)) as WriteResult;
+    expect(added.ok && added.nodes[0]!.version).toBeGreaterThan(7);
+  });
+});

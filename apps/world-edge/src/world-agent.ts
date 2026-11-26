@@ -4,6 +4,7 @@ import {
   boundsSchema,
   entityIdSchema,
   graphOpSchema,
+  currentVersionFloor,
   LIMITS,
   newId,
   validateWorldGraph,
@@ -331,7 +332,9 @@ export class WorldAgent extends Agent<Env, WorldSummaryState> {
       return { ok: false, version: current.version, error: { code: 'DUPLICATE_ID', message: `World ${this.name} already has content. Import only seeds an empty world in v1.` } };
     }
     const actor = actorFor(principal);
-    const version = current.version + 1;
+    // The world version is the counter every entity version is drawn from, so
+    // it must start at or above the highest version in the imported graph.
+    const version = Math.max(current.version + 1, currentVersionFloor(g));
     const seq = this.ctx.storage.transactionSync(() => {
       store.setWorldMeta({ title: g.world.title, summary: g.world.summary, version, updatedAt: actor.at });
       store.replaceRegions(g.world.regions);
