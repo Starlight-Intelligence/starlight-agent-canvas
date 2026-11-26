@@ -68,7 +68,7 @@ export const nodePatchSchema = z.strictObject({
   regionId: entityIdSchema.nullable().optional(),
   layer: z.number().int().min(-1000).max(1000).optional(),
   meta: z.record(z.string(), z.unknown()).optional(),
-}).refine((patch) => Object.keys(patch).length > 0, { message: 'patch must change at least one field.' });
+}).refine((patch) => Object.values(patch).some((value) => value !== undefined), { message: 'patch must change at least one field.' });
 export type NodePatch = z.infer<typeof nodePatchSchema>;
 
 const baseVersionSchema = z.number().int().positive();
@@ -332,7 +332,10 @@ export function applyOps(graph: WorldGraph, ops: readonly unknown[], context: Ap
             fail({ code: 'CANON_LOCKED', message: `Node ${node.id} is canon. Change it through a canon PR, not an edit.`, opIndex, id: node.id });
           }
           requireRegion(op.patch.regionId, opIndex);
-          const { size, ...rest } = op.patch;
+          // A direct JS caller can pass `{ title: undefined }`; zod accepts it, but
+          // spreading it would erase the field. Treat undefined as "not changed".
+          const patch = Object.fromEntries(Object.entries(op.patch).filter(([, value]) => value !== undefined)) as typeof op.patch;
+          const { size, ...rest } = patch;
           const next: WorldNode = { ...node, ...rest, updatedAt: actor.at, version: node.version + 1 };
           if (size === null) delete next.size;
           else if (size) next.size = size;
@@ -455,6 +458,18 @@ export function applyOps(graph: WorldGraph, ops: readonly unknown[], context: Ap
     throw error;
   }
 
+  // Reconcile proposals with the final batch state: a later edit (which drops
+  // the target back to draft) or a remove invalidates an earlier proposal, and
+  // repeated proposals for one target collapse to the last one.
+  const lastProposal = new Map<string, CanonProposal>();
+  for (const proposal of proposals) lastProposal.set(`${proposal.targetType}:${proposal.id}`, proposal);
+  const liveProposals: CanonProposal[] = [];
+  for (const proposal of lastProposal.values()) {
+    const target = proposal.targetType === 'node' ? nodes.get(proposal.id) : edges.get(proposal.id);
+    if (!target || target.canon.status !== 'proposed') continue;
+    liveProposals.push(target.version === proposal.version ? proposal : { ...proposal, version: target.version });
+  }
+
   return {
     ok: true,
     graph: {
@@ -470,7 +485,7 @@ export function applyOps(graph: WorldGraph, ops: readonly unknown[], context: Ap
       removedNodes: [...removedNodes],
       removedEdges: [...removedEdges],
     },
-    proposals,
+    proposals: liveProposals,
   };
 }
 
