@@ -39,12 +39,29 @@ export function tileKey(position: Position, tileSize = TILE_SIZE): string {
   return `${Math.floor(position.x / tileSize)}:${Math.floor(position.y / tileSize)}`;
 }
 
-/** Tile keys overlapped by a rectangle, row-major. */
-export function tileKeysForBounds(bounds: Bounds, tileSize = TILE_SIZE): string[] {
+/** Most tiles one tileKeysForBounds call will enumerate. */
+export const MAX_TILES_PER_QUERY = 4096;
+
+/**
+ * Tile keys overlapped by a rectangle, row-major. Throws RangeError when a tile
+ * index is not a safe integer or the rectangle covers more than `maxTiles`
+ * tiles, so a huge schema-valid rectangle cannot loop forever or allocate an
+ * enormous array. Callers at `cluster` zoom should ask for per-tile counts or
+ * a coarser tile size instead.
+ */
+export function tileKeysForBounds(bounds: Bounds, tileSize = TILE_SIZE, maxTiles = MAX_TILES_PER_QUERY): string[] {
+  if (!Number.isFinite(tileSize) || tileSize <= 0) throw new RangeError(`tileSize must be > 0, got ${tileSize}`);
   const x0 = Math.floor(bounds.x / tileSize);
   const y0 = Math.floor(bounds.y / tileSize);
   const x1 = Math.floor((bounds.x + bounds.w) / tileSize);
   const y1 = Math.floor((bounds.y + bounds.h) / tileSize);
+  if (![x0, y0, x1, y1].every(Number.isSafeInteger)) {
+    throw new RangeError('bounds produce tile indices outside the safe integer range.');
+  }
+  const count = (x1 - x0 + 1) * (y1 - y0 + 1);
+  if (count > maxTiles) {
+    throw new RangeError(`bounds cover ${count} tiles; the limit is ${maxTiles}. Use a coarser tile size or per-tile counts.`);
+  }
   const keys: string[] = [];
   for (let ty = y0; ty <= y1; ty++) {
     for (let tx = x0; tx <= x1; tx++) keys.push(`${tx}:${ty}`);
