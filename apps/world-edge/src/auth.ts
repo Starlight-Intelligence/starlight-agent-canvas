@@ -121,7 +121,6 @@ interface JwksCache {
 }
 
 let jwksCache: JwksCache | null = null;
-let jwksInFlight: Promise<Jwk[]> | null = null;
 export const JWKS_TTL_MS = 10 * 60 * 1000;
 /** An unknown kid can trigger a refetch at most once per this interval, Worker-isolate wide. */
 export const JWKS_UNKNOWN_KID_REFETCH_MS = 60 * 1000;
@@ -154,27 +153,25 @@ export function normalizeTeamDomain(domain: string): string {
   return url.origin;
 }
 
+/**
+ * Fetch and cache the keys in the request that needs them. No promise is
+ * shared across requests: workerd may cancel or hang I/O that belongs to
+ * another request. Concurrent unknown-kid requests are still bounded, because
+ * lastFetchAt is stamped before the fetch starts (see keyFor).
+ */
 async function fetchKeys(url: string, fetcher: JwksFetcher, now: number): Promise<Jwk[]> {
-  // Concurrent misses share one fetch.
-  if (!jwksInFlight) {
-    jwksInFlight = (async () => {
-      try {
-        const { keys } = await fetcher(url);
-        jwksCache = {
-          url,
-          keys: Array.isArray(keys) ? keys : [],
-          fetchedAt: now,
-          // Any fetch is as fresh as a forced one.
-          lastFetchAt: now,
-          unknownKids: new Map(),
-        };
-        return jwksCache.keys;
-      } finally {
-        jwksInFlight = null;
-      }
-    })();
-  }
-  return jwksInFlight;
+  const prior = jwksCache?.url === url ? jwksCache : null;
+  if (prior) prior.lastFetchAt = now;
+  const { keys } = await fetcher(url);
+  jwksCache = {
+    url,
+    keys: Array.isArray(keys) ? keys : [],
+    fetchedAt: now,
+    // Any fetch is as fresh as a forced one.
+    lastFetchAt: now,
+    unknownKids: new Map(),
+  };
+  return jwksCache.keys;
 }
 
 /**
@@ -218,7 +215,6 @@ function rememberUnknown(cache: JwksCache, kid: string, until: number): void {
 /** Test hook. */
 export function resetJwksCache(): void {
   jwksCache = null;
-  jwksInFlight = null;
 }
 
 export async function verifyAccessJwt(

@@ -107,6 +107,21 @@ describe('1. JWKS cache cannot be bypassed with unknown kids', () => {
     expect(fetches).toBeLessThanOrEqual(2);
   });
 
+  it('concurrent unknown-kid requests cause at most one forced refetch, without a shared promise', async () => {
+    const { pair, jwk } = await keypair('k1');
+    let fetches = 0;
+    const fetcher: JwksFetcher = async () => { fetches += 1; await sleep(20); return { keys: [jwk] }; };
+    const now = Date.now();
+    const payload = { iss: accessEnv.ACCESS_TEAM_DOMAIN, aud: [accessEnv.ACCESS_AUD], email: 'a@example.com', exp: Math.floor(now / 1000) + 600 };
+    // Warm the cache.
+    await verifyAccessJwt(await sign(pair.privateKey, payload, 'k1'), accessEnv, { fetcher, now });
+    const tokens = await Promise.all(Array.from({ length: 20 }, (_, i) => sign(pair.privateKey, payload, `rand-${i}`)));
+    // Past the interval, so exactly one forced refetch is allowed.
+    const results = await Promise.allSettled(tokens.map((t) => verifyAccessJwt(t, accessEnv, { fetcher, now: now + 120_000 })));
+    expect(results.every((r) => r.status === 'rejected')).toBe(true);
+    expect(fetches).toBe(2);
+  });
+
   it('still picks up a rotated key once the refetch interval has passed', async () => {
     const k1 = await keypair('k1');
     const k2 = await keypair('k2');
