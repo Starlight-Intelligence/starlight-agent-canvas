@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { originDenied } from '@/lib/request-origin';
 import { applyWorldOps, WorldNotFoundError } from '@/lib/world/world-files';
 
 export const dynamic = 'force-dynamic';
@@ -11,11 +12,10 @@ export const dynamic = 'force-dynamic';
 export async function POST(request: Request, context: { params: Promise<{ worldId: string }> }) {
   const { worldId } = await context.params;
   // A page on another origin must not edit the local world. A text/plain JSON
-  // body needs no CORS preflight, so check the origin explicitly, as the
+  // body needs no CORS preflight, so check the origin explicitly against the
+  // loopback hosts and WORLD_ALLOWED_ORIGINS (never the Host header), as the
   // checkpoint and website routes do, and require a JSON content type.
-  const origin = request.headers.get('origin');
-  const expectedOrigin = `${new URL(request.url).protocol}//${request.headers.get('host')?.toLowerCase()}`;
-  if (request.headers.get('sec-fetch-site') === 'cross-site' || (origin && origin !== expectedOrigin)) {
+  if (originDenied(request)) {
     return NextResponse.json({ ok: false, error: { code: 'INVALID_OP', message: 'World edits require the workspace origin.' } }, { status: 403 });
   }
   if (!request.headers.get('content-type')?.toLowerCase().startsWith('application/json')) {

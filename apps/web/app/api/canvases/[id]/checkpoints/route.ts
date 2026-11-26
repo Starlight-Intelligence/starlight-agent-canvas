@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getStore } from '@/lib/store';
 import { checkpointErrorResponse } from '@/lib/checkpoint-response';
+import { originDenied } from '@/lib/request-origin';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -17,9 +18,7 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     // A browser on another origin cannot create history in the local workspace.
-    const origin = request.headers.get('origin');
-    const expectedOrigin = `${new URL(request.url).protocol}//${request.headers.get('host')?.toLowerCase()}`;
-    if (request.headers.get('sec-fetch-site') === 'cross-site' || (origin && origin !== expectedOrigin)) {
+    if (originDenied(request)) {
       return NextResponse.json({ error: 'Checkpoint saves require the workspace origin.' }, { status: 403 });
     }
     const { id } = await context.params;
