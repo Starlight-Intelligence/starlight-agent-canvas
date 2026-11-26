@@ -27,10 +27,6 @@ import {
  *   next value, so versions only grow and are never reused, even when an id is
  *   removed and created again. `world.version` is the counter's current value.
  * - A batch may touch each node or edge at most once (INVALID_OP otherwise).
- * - Removing a node also removes its edges; that counts as each edge's one
- *   change, so a batch that already touched one of those edges is rejected.
- * - A batch that would push the counter past Number.MAX_SAFE_INTEGER is
- *   rejected (VERSION_EXHAUSTED).
  * - A batch is atomic: all ops apply or none do.
  * - No op can set canon.status to 'canon'. The most an op can do is
  *   'proposed'. Canon is promoted only by syncing merged canon from git
@@ -203,14 +199,14 @@ export type ApplyResult =
   | { ok: false; graph: WorldGraph; error: OpError };
 
 /**
- * Thrown by promoteToCanon when the world version counter has reached
- * Number.MAX_SAFE_INTEGER. applyOps reports the same condition as an
+ * Thrown by promoteToCanon when the world version counter is exhausted
+ * (at Number.MAX_SAFE_INTEGER). applyOps reports the same condition as an
  * OpError with code VERSION_EXHAUSTED.
  */
 export class VersionExhaustedError extends Error {
   readonly code = 'VERSION_EXHAUSTED' as const;
   constructor(readonly current: number) {
-    super(`World version counter is at ${current}; no further versions can be issued safely.`);
+    super(`promoteToCanon: the world version counter is exhausted (at ${current}).`);
     this.name = 'VersionExhaustedError';
   }
 }
@@ -322,17 +318,11 @@ export function applyOps(graph: WorldGraph, ops: readonly unknown[], context: Ap
   const proposals: CanonProposal[] = [];
 
   let counter = currentVersionFloor(graph);
-  // Versions must stay safe integers, or the result fails schema validation
-  // and versions stop being exact. Refuse the batch before the counter passes
-  // Number.MAX_SAFE_INTEGER.
   let currentOp = 0;
   const bump = (): number => {
-    if (!(counter < Number.MAX_SAFE_INTEGER)) {
-      fail({
-        code: 'VERSION_EXHAUSTED',
-        message: `World version counter is at ${counter}; this batch would pass Number.MAX_SAFE_INTEGER.`,
-        opIndex: currentOp,
-      });
+    // Versions must stay safe integers; refuse rather than wrap or stall.
+    if (counter >= Number.MAX_SAFE_INTEGER) {
+      fail({ code: 'VERSION_EXHAUSTED', message: 'The world version counter is at Number.MAX_SAFE_INTEGER; no further changes can be versioned.', opIndex: currentOp });
     }
     return ++counter;
   };
@@ -471,20 +461,14 @@ export function applyOps(graph: WorldGraph, ops: readonly unknown[], context: Ap
           }
           const attached = incidentEdges(node.id);
           for (const edge of attached) {
+            // The cascade changes each incident edge, so it obeys the
+            // once-per-entity rule too (an edge added or proposed earlier in
+            // this batch cannot be cascaded away by removing its endpoint).
+            if (touched.has(`edge:${edge.id}`)) {
+              fail({ code: 'INVALID_OP', message: `edge ${edge.id} was already changed in this batch; removing node ${node.id} would change it again.`, opIndex, id: edge.id });
+            }
             if (edge.canon.status === 'canon') {
               fail({ code: 'CANON_LOCKED', message: `Node ${node.id} has canon edge ${edge.id}; remove is refused.`, opIndex, id: edge.id });
-            }
-            // The cascade removes the edge, which counts as its one change in
-            // this batch. An edge already added or changed earlier in the batch
-            // would be changed twice (and an edge added in this batch would be
-            // reported removed though it never existed), so refuse.
-            if (touched.has(`edge:${edge.id}`)) {
-              fail({
-                code: 'INVALID_OP',
-                message: `Removing node ${node.id} would also remove edge ${edge.id}, which this batch already changes. Drop the edge op or remove the edge in a separate batch.`,
-                opIndex,
-                id: edge.id,
-              });
             }
           }
           for (const edge of attached) {
@@ -623,7 +607,7 @@ export function promoteToCanon(
   const stamp = actorSchema.parse(actor);
   const canon: Canon = { status: 'canon', ref };
   const floor = currentVersionFloor(graph);
-  if (!(floor < Number.MAX_SAFE_INTEGER)) throw new VersionExhaustedError(floor);
+  if (floor >= Number.MAX_SAFE_INTEGER) throw new VersionExhaustedError(floor);
   const version = floor + 1;
   if (target.type === 'node') {
     let found = false;

@@ -149,7 +149,8 @@ applyOps(graph: WorldGraph, ops: unknown[], { actor }: { actor: Actor }): ApplyR
 - Ops are parsed with strict schemas. Unknown keys are rejected, not dropped, so `canon`, `version`, `createdBy` and `worldId` cannot be smuggled in.
 - Identity and time come from `actor`, which the server builds from the authenticated session. `createdBy` on new entities and every `updatedAt` use it.
 - Max 500 ops per batch; max 5000 moves per `moveNodes`.
-- A batch may change each node or edge at most once. A second change to the same id in one batch (including remove then re-add, or the same node twice in one `moveNodes`) fails with `INVALID_OP`; clients merge their changes into one op.
+- A batch may change each node or edge at most once. A second change to the same id in one batch (including remove then re-add, or the same node twice in one `moveNodes`) fails with `INVALID_OP`; clients merge their changes into one op. The edges a `removeNode` cascades away count as changed too, so an edge added, proposed or removed earlier in the batch cannot also be cascaded (`INVALID_OP`).
+- Versions are safe integers. When the counter is at `Number.MAX_SAFE_INTEGER` a batch with any change fails with `VERSION_EXHAUSTED` (with `opIndex` of the first op that needs a version; `promoteToCanon` throws `VersionExhaustedError`, `code: "VERSION_EXHAUSTED"`) instead of issuing an unsafe version.
 
 ### 4.1 Ops
 
@@ -185,7 +186,7 @@ Failure:
 { ok: false, graph /* unchanged input */, error: { code, message, opIndex?, id?, expectedVersion?, actualVersion? } }
 ```
 
-Error codes: `INVALID_OP`, `INVALID_CONTEXT`, `NOT_FOUND`, `DUPLICATE_ID`, `STALE_VERSION`, `CANON_FORBIDDEN`, `CANON_LOCKED`, `INVALID_REFERENCE`.
+Error codes: `INVALID_OP`, `INVALID_CONTEXT`, `NOT_FOUND`, `DUPLICATE_ID`, `STALE_VERSION`, `CANON_FORBIDDEN`, `CANON_LOCKED`, `INVALID_REFERENCE`, `VERSION_EXHAUSTED`.
 
 L2 broadcasts `changed` (with the new entity versions) and the new `world.version` to every connected client after a successful batch.
 
@@ -207,7 +208,7 @@ The browser never loads a whole large world.
 
 1. World space is cut into square tiles of `TILE_SIZE = 2048` world units. `tileKey({x, y})` is `"<floor(x/2048)>:<floor(y/2048)>"`. A node belongs to the tile containing its `position`.
 2. L2 keeps a D1 index row per node: `(world_id, node_id, tile_key, region_id, kind, title, canon_status, version, x, y, w, h)` with an index on `(world_id, tile_key)`. The full node JSON lives in the world's Durable Object storage.
-3. On viewport change the client computes `tileKeysForBounds(viewport padded by one tile)` and asks only for tiles it does not hold. `tileKeysForBounds` throws `RangeError` above `MAX_TILES_PER_QUERY` (4096) tiles or when a tile index is not a safe integer, so a huge rectangle cannot loop or allocate without bound. At `cluster` level the client asks for per-tile counts by kind (or uses a coarser tile size) instead of nodes.
+3. On viewport change the client computes `tileKeysForBounds(viewport padded by one tile)` and asks only for tiles it does not hold. `tileKeysForBounds` throws `RangeError` above its `maxTiles` limit (default `MAX_TILES_PER_QUERY`, 4096; a caller value must be a positive integer and is clamped to `MAX_TILES_HARD_LIMIT`, 65,536) or when a tile index is not a safe integer, so a huge rectangle cannot loop or allocate without bound. At `cluster` level the client asks for per-tile counts by kind (or uses a coarser tile size) instead of nodes.
 4. Edges are returned with a tile when either endpoint is in the tile. The client keeps an LRU of tiles and drops tiles far outside the viewport.
 5. Region outlines (`world.regions`, at most 4096) and the minimap always load in full; they are small.
 6. Search (D1 full text plus Vectorize) returns node ids with positions so the client can jump and then load the tiles there.
@@ -226,16 +227,16 @@ pnpm world:import --in <whiteboard.json> --out <world.json> --world-id arcanea -
 It reads layout, not names:
 
 - A title text like `III · THE TEN GATES` opens a section. Each section becomes a Region and a `region` node. An element belongs to the nearest section header above and left of it. Elements with no header form the `Overview` region.
-- `01 · Foundation` is a gate heading. The line under it, `A × B`, gives a `god` (A) and a `godbeast` (B); the next line is the gate summary. Edges: `god rules gate`, `god bonded-to godbeast`, `gate part-of <N> Gates` concept.
+- `01 · Foundation` is a gate heading. The line under it, `A × B`, gives a `god` (A) and a `godbeast` (B); the next line is the gate summary. Edges: `god rules gate`, `god bonded-to godbeast`, `gate part-of <N> Gates` concept. A line with more than two names uses the first two, keeps the full line in the gate's `body` and the extra names in `meta.gate.unexpandedNames`, and adds a report warning.
 - `Seven Houses: A, B, C.` gives one `house` node per item, `part-of` the `Seven Houses` concept.
 - A short large text is a heading; the text under it is its summary. Kind: lexicon, else section hint (a "story" section holds characters), else `concept`.
 - Bullet lists give one node per bullet. Pills become `concept` nodes. Shapes without text are frames and are skipped.
-- A small text under an image is its caption; text inside an image box is the image summary. Images become `image` nodes with `media[].originalSrc` and `needsReupload: true`. A `src` over 100,000 characters (the `originalSrc` cap) keeps the node without media, records `meta.oversizedSrc` (length, hash, prefix) and `meta.needsReupload: true`, and adds a report warning. A free text longer than the summary limit keeps its full text in `body` even without a newline. An image right above or left of a heading gets `image references entity` (label `depicts`).
+- A small text under an image is its caption; text inside an image box is the image summary. Images become `image` nodes with `media[].originalSrc` and `needsReupload: true`. A `src` over 100,000 characters (the `originalSrc` cap) keeps the node without media, records `meta.oversizedSrc` (length, hash, prefix) and `meta.needsReupload: true`, and adds a report warning. A free text longer than the summary limit keeps its full text in `body` even without a newline. An image `href` is checked with the same validator as `media.href`; a link the schema would reject (non-http(s), or over 2,048 characters) is left out of `media`, kept in `meta.originalHref`, and reported as a warning instead of aborting the import. An image right above or left of a heading gets `image references entity` (label `depicts`).
 - Arrows become `precedes` edges. A node whose text names another entity title gets `references` (label `mentions`).
 - Everything imported is `canon.status: "draft"`, `createdBy.harness: "importer"`. Output is deterministic.
 - Text is never dropped silently. When a merged caption, summary or heading text is longer than the title or summary limit, the full text goes to `body` (appended if body already holds other text) and `report.truncated` records the node, source elements, field, original and kept length; if body itself overflows, `fullTextIn` is `null` and a warning says text was lost. Section titles over the title limit are clipped in the region and recorded the same way. Oversized images count toward `needsReupload` in the report.
 - Input checks: duplicate element ids in array input are rejected; the error names every repeated id. The timestamp (`options.at`, else `exportedAt`) must be `YYYY-MM-DD` or an ISO datetime with `Z` or an offset; it is stored in UTC. A timestamp without a zone is rejected because it would depend on the host time zone.
-- The CLI refuses (exit 2, nothing written) when any two of `--in`, `--lexicon`, `--out` and `--report` are the same file, after resolving the path and symlinks; the comparison is case-insensitive on Windows and macOS.
+- The CLI refuses (exit 2, nothing written) when any two of `--in`, `--lexicon`, `--out` and `--report` are the same file, after resolving the path and symlinks; the comparison is case-insensitive on Windows and macOS. Outputs are written through a temp file with a random name in the target directory, created exclusively (`wx`), then renamed into place; an existing file at any temp path is never opened.
 
 The report lists elements in by type, nodes and edges out by kind and relation, regions out, per-element dispositions (`node`, `merged`, `expanded`, `edge`, `region`, `skipped`) that always sum to the element count, images needing re-upload, truncated text, and warnings.
 

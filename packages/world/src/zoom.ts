@@ -39,23 +39,22 @@ export function tileKey(position: Position, tileSize = TILE_SIZE): string {
   return `${Math.floor(position.x / tileSize)}:${Math.floor(position.y / tileSize)}`;
 }
 
-/** Most tiles one tileKeysForBounds call will enumerate. */
+/** Default for how many tiles one tileKeysForBounds call will enumerate. */
 export const MAX_TILES_PER_QUERY = 4096;
+/** Hard ceiling; a caller-provided `maxTiles` above this is clamped to it. */
+export const MAX_TILES_HARD_LIMIT = 65_536;
 
 /**
  * Tile keys overlapped by a rectangle, row-major. Throws RangeError when a tile
  * index is not a safe integer or the rectangle covers more than `maxTiles`
- * tiles (`maxTiles` must be a positive integer and is clamped to
- * MAX_TILES_PER_QUERY), so a huge schema-valid rectangle cannot loop forever or allocate an
+ * tiles, so a huge schema-valid rectangle cannot loop forever or allocate an
  * enormous array. Callers at `cluster` zoom should ask for per-tile counts or
  * a coarser tile size instead.
  */
 export function tileKeysForBounds(bounds: Bounds, tileSize = TILE_SIZE, maxTiles = MAX_TILES_PER_QUERY): string[] {
   if (!Number.isFinite(tileSize) || tileSize <= 0) throw new RangeError(`tileSize must be > 0, got ${tileSize}`);
-  // NaN or Infinity would make `count > maxTiles` always false and disable
-  // the cap. Require a positive integer and never exceed the hard cap.
-  if (!Number.isSafeInteger(maxTiles) || maxTiles <= 0) throw new RangeError(`maxTiles must be a positive integer, got ${maxTiles}`);
-  const limit = Math.min(maxTiles, MAX_TILES_PER_QUERY);
+  if (!Number.isSafeInteger(maxTiles) || maxTiles < 1) throw new RangeError(`maxTiles must be a positive integer, got ${maxTiles}`);
+  const limit = Math.min(maxTiles, MAX_TILES_HARD_LIMIT);
   const x0 = Math.floor(bounds.x / tileSize);
   const y0 = Math.floor(bounds.y / tileSize);
   const x1 = Math.floor((bounds.x + bounds.w) / tileSize);

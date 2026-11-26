@@ -6,7 +6,7 @@ import { runImportWhiteboard } from '../cli/run-import.js';
 import { importClaudeWhiteboard } from '../import/claude-whiteboard.js';
 import { applyOps, promoteToCanon, VersionExhaustedError } from '../ops.js';
 import { validateWorldGraph } from '../validate.js';
-import { MAX_TILES_PER_QUERY, TILE_SIZE, tileKeysForBounds } from '../zoom.js';
+import { MAX_TILES_HARD_LIMIT, MAX_TILES_PER_QUERY, TILE_SIZE, tileKeysForBounds } from '../zoom.js';
 import { claude, sampleGraph } from './helpers.js';
 
 const ctx = { actor: claude };
@@ -113,10 +113,12 @@ describe('#64 Codex re-review 3: maxTiles must be a finite positive integer', ()
     }
   });
 
-  it('clamps a larger maxTiles to the hard cap', () => {
-    expect(() => tileKeysForBounds(big, TILE_SIZE, 1_000_000)).toThrow(RangeError);
+  it('a larger maxTiles still enumerates normally below the hard ceiling', () => {
     const atCap = { x: 0, y: 0, w: TILE_SIZE * 63, h: TILE_SIZE * 63 }; // 64 x 64 = 4096
     expect(tileKeysForBounds(atCap, TILE_SIZE, 1_000_000)).toHaveLength(MAX_TILES_PER_QUERY);
+    const overCeiling = { x: 0, y: 0, w: TILE_SIZE * 256, h: TILE_SIZE * 256 }; // 257 x 257 > 65,536
+    expect(() => tileKeysForBounds(overCeiling, TILE_SIZE, Number.MAX_SAFE_INTEGER)).toThrow(RangeError);
+    expect(MAX_TILES_HARD_LIMIT).toBe(65_536);
   });
 
   it('still honours a smaller maxTiles', () => {
@@ -139,7 +141,8 @@ describe('#64 Codex re-review 4: over-long image hrefs are filtered, not fatal',
     expect(dropped.media[0].href).toBeUndefined();
     expect(dropped.media[0].originalSrc).toBe('/_blob/abc.png');
     expect(images.find((n) => n.media[0].href === 'https://example.com/fine')).toBeTruthy();
-    expect(result.report.warnings.some((w) => w.includes('img') && /2048/.test(w))).toBe(true);
+    expect(dropped.meta.originalHref).toBe(longHref);
+    expect(result.report.warnings.some((w) => w.includes('img'))).toBe(true);
   });
 });
 
@@ -156,7 +159,9 @@ describe('#64 Codex re-review 5: gate lines with more than two names', () => {
     if (disposition.as !== 'expanded') return;
     expect(disposition.nodeIds).toHaveLength(2);
     expect(disposition.dropped).toEqual(['Fen']);
-    expect(result.report.warnings.some((w) => w.includes('Fen') && w.includes('p'))).toBe(true);
+    expect(result.report.warnings.some((w) => w.includes('3 names') && w.includes('p'))).toBe(true);
+    const gate = result.graph.nodes.find((n) => n.title === 'Stone Gate')!;
+    expect((gate.meta.gate as { unexpandedNames?: string[] }).unexpandedNames).toEqual(['Fen']);
   });
 
   it('two names expand fully with nothing dropped', () => {

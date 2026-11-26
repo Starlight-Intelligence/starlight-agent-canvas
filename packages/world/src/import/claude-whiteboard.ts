@@ -1,9 +1,9 @@
 import { z } from 'zod';
 import { edgeIdFor, hash53, slugify, stableId } from '../ids.js';
 import {
-  isSafeLinkHref,
   LIMITS,
   nodeKindSchema,
+  safeLinkHrefSchema,
   WORLD_GRAPH_SCHEMA_VERSION,
   type Actor,
   type Bounds,
@@ -109,7 +109,7 @@ export interface ImportOptions {
 export type ElementDisposition =
   | { as: 'node'; nodeId: string }
   | { as: 'merged'; into: string; role: string }
-  | { as: 'expanded'; nodeIds: string[]; /** Names on the line that were not turned into nodes. */ dropped?: string[] }
+  | { as: 'expanded'; nodeIds: string[]; /** Names on the line that did not become nodes. */ dropped?: string[] }
   | { as: 'edge'; edgeId: string }
   | { as: 'region'; regionId: string; nodeId: string }
   | { as: 'skipped'; reason: string };
@@ -233,26 +233,14 @@ function isHex6(color: string | undefined): color is string {
   return Boolean(color && /^#[0-9a-fA-F]{6}$/.test(color));
 }
 
-type HrefCheck = { href: string; reason?: undefined } | { href?: undefined; reason?: string };
-
-/**
- * An image href the graph will accept: http(s), normalized, and within the
- * same limits as `mediaSchema.href` (safeLinkHrefSchema). Anything else is
- * filtered here with a reason, so one bad link cannot abort the import.
- */
-function checkHref(value: string | undefined): HrefCheck {
-  if (!value) return {};
-  let normalized: string;
+function safeUrl(value: string | undefined): string | undefined {
+  if (!value) return undefined;
   try {
     const url = new URL(value);
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') return { reason: 'a non-http href' };
-    normalized = url.toString();
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url.toString() : undefined;
   } catch {
-    return { reason: 'a non-http href' };
+    return undefined;
   }
-  if (normalized.length > 2048) return { reason: `an href of ${normalized.length} characters (limit 2048)` };
-  if (!isSafeLinkHref(normalized)) return { reason: 'an href the graph does not accept' };
-  return { href: normalized };
 }
 
 function normalizeAt(options: ImportOptions, exportedAt: string | undefined): string {
@@ -629,18 +617,25 @@ export function importClaudeWhiteboard(input: unknown, options: ImportOptions = 
     } else {
       domain = pair;
     }
+    // Only "God × Godbeast" is understood. Keep any extra names on the gate
+    // and report the line instead of dropping them.
+    const extraNames = names.length > 2 ? names.slice(2) : [];
+    if (extraNames.length > 0 && pair) {
+      warnings.push(`Gate "${gateName}" (${heading.key}): line ${pair.key} has ${names.length} names; used the first two, kept the full line in the gate body.`);
+    }
     const regionId = regionIdOf(heading);
     const gate = addNode({
       key: heading.key,
       kind: 'gate',
       title: `${gateName} Gate`,
       summary: domain?.text?.trim() ?? '',
+      body: extraNames.length > 0 && pair ? pair.text!.trim() : undefined,
       tags: ['gate', `gate-${String(number).padStart(2, '0')}`],
       position: { x: heading.x ?? 0, y: heading.y ?? 0 },
       size: { w: heading.wrap ?? 430, h: 140 },
       regionId,
       elementIds: [heading.key, ...(domain ? [domain.key] : [])],
-      extraMeta: { gate: { number, name: gateName } },
+      extraMeta: { gate: { number, name: gateName, ...(extraNames.length > 0 ? { unexpandedNames: extraNames } : {}) } },
       mentionable: true,
     });
     disposition.set(heading.key, { as: 'node', nodeId: gate.id });
@@ -650,7 +645,7 @@ export function importClaudeWhiteboard(input: unknown, options: ImportOptions = 
 
     if (pair && names.length > 0) {
       const created: string[] = [];
-      const [godName, beastName, ...extraNames] = names;
+      const [godName, beastName] = names;
       const god = addNode({
         key: `${pair.key}#god`,
         kind: kindFor(godName, 'god'),
@@ -681,12 +676,7 @@ export function importClaudeWhiteboard(input: unknown, options: ImportOptions = 
       } else {
         warnings.push(`Gate "${gateName}" (${heading.key}) lists a god but no godbeast.`);
       }
-      if (extraNames.length > 0) {
-        warnings.push(`Gate "${gateName}" (${pair.key}) line names more than a god and a godbeast; dropped: ${extraNames.map((name) => `"${name}"`).join(', ')}.`);
-        disposition.set(pair.key, { as: 'expanded', nodeIds: created, dropped: extraNames });
-      } else {
-        disposition.set(pair.key, { as: 'expanded', nodeIds: created });
-      }
+      disposition.set(pair.key, extraNames.length > 0 ? { as: 'expanded', nodeIds: created, dropped: extraNames } : { as: 'expanded', nodeIds: created });
     } else {
       warnings.push(`Gate "${gateName}" (${heading.key}) has no "God × Godbeast" line.`);
     }
@@ -849,9 +839,11 @@ export function importClaudeWhiteboard(input: unknown, options: ImportOptions = 
       || (depictedNode
         ? `${depictedNode.title} ${isPlaceholder ? 'placeholder' : 'plate'}`
         : role === 'cover' ? `${worldTitle} cover` : `${regionTitleOf(img) || worldTitle} image`);
-    const hrefCheck = checkHref(img.href);
-    const href = hrefCheck.href;
-    if (img.href && !href) warnings.push(`Image ${img.key} has ${hrefCheck.reason ?? 'an unusable href'}; kept in meta only.`);
+    // Use the same validator as the schema, so a link the schema would reject
+    // (non-http, or over its length cap) never aborts the import.
+    const normalizedHref = safeUrl(img.href);
+    const href = normalizedHref && safeLinkHrefSchema.safeParse(normalizedHref).success ? normalizedHref : undefined;
+    if (img.href && !href) warnings.push(`Image ${img.key} has an href the schema does not accept (non-http or too long); kept in meta only.`);
     const media: Media[] = [];
     let oversizedSrc: { length: number; hash53: string; prefix: string } | undefined;
     if (img.src && img.src.length > ORIGINAL_SRC_MAX) {
