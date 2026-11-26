@@ -152,7 +152,7 @@ export const Inspector = forwardRef<HTMLInputElement, InspectorProps>(function I
             <h4 id="canon-heading">Canon</h4>
             {node.canon.status === 'draft' ? (
               <>
-                <p className="wc-muted">Canon lives in git. Proposing marks this node proposed and opens a canon PR through the world service; it never sets canon here.</p>
+                <p className="wc-muted">Canon lives in git. Proposing marks this node proposed and queues the proposal. A maintainer opens the canon PR with the canon-pr tool; nothing here opens a PR or sets canon.</p>
                 <label className="wc-field">
                   <span>Why it belongs in canon</span>
                   <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} maxLength={2000} />
@@ -173,7 +173,7 @@ export const Inspector = forwardRef<HTMLInputElement, InspectorProps>(function I
               </>
             ) : node.canon.status === 'proposed' ? (
               <p className="wc-muted">
-                Proposed. {node.canon.ref ? <a href={node.canon.ref} target="_blank" rel="noreferrer">Open the canon PR</a> : 'Waiting for the canon PR.'} Editing content moves it back to draft.
+                Proposed. {node.canon.ref ? <a href={node.canon.ref} target="_blank" rel="noreferrer">Open the canon PR</a> : 'Queued. A maintainer opens the canon PR with the canon-pr tool.'} Editing content moves it back to draft.
               </p>
             ) : (
               <p className="wc-muted">

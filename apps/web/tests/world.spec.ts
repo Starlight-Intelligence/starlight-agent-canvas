@@ -60,8 +60,12 @@ test.describe('world canvas', () => {
     await page.goto(`/world/demo?node=${info.project.name === 'mobile' ? 'n_gen_4' : 'n_gen_2'}`);
     await ready(page);
     const inspector = page.getByRole('complementary', { name: 'Inspector' });
+    // Nothing opens a PR automatically: the copy must say the proposal is queued for a maintainer.
+    await expect(inspector.getByText(/A maintainer opens the canon PR with the canon-pr tool/)).toBeVisible();
+    await expect(inspector.getByText(/opens a canon PR through the world service/)).toHaveCount(0);
     await inspector.getByRole('button', { name: 'Propose canon' }).click();
     await expect(inspector.locator('.wc-canon--proposed')).toBeVisible();
+    await expect(inspector.getByText(/Queued\. A maintainer opens the canon PR/)).toBeVisible();
     await expect(page.locator('.wc-canon--canon')).toHaveCount(0);
   });
 
