@@ -545,6 +545,7 @@ describe('HttpMcpTransport review fixes', () => {
   it.each([
     ['STALE_VERSION: node n_x is at 4', 'STALE_VERSION', 'node n_x is at 4'],
     ['CANON_LOCKED: node n_x is canon', 'CANON_LOCKED', 'node n_x is canon'],
+    ['VERSION_EXHAUSTED: counter at limit', 'VERSION_EXHAUSTED', 'counter at limit'],
     ['UNAUTHORIZED: token lacks write scope', 'UNAUTHORIZED', 'token lacks write scope'],
     ['INVALID_INPUT: bounds: Too small', 'INVALID_INPUT', 'bounds: Too small'],
     ['BOUNDS_TOO_LARGE: Bounds cover more than 1024 tiles.', 'BOUNDS_TOO_LARGE', 'Bounds cover more than 1024 tiles.'],
