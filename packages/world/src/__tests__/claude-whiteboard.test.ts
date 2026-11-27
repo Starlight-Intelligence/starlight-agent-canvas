@@ -142,3 +142,32 @@ describe.skipIf(!realPath || !existsSync(realPath))('importClaudeWhiteboard (rea
     console.log(`real export: ${report.elementsIn} elements -> ${report.nodesOut} nodes, ${report.edgesOut} edges, ${report.regionsOut} regions`);
   });
 });
+
+describe('importClaudeWhiteboard group concepts created as headings', () => {
+  const doc = {
+    title: 'Heading Land',
+    elements: {
+      c1: { type: 'text', size: 'large', text: 'Two Gates', x: 0, y: 0, wrap: 300 },
+      c2: { type: 'text', size: 'large', text: 'Two Houses', x: 600, y: 0, wrap: 300 },
+      g1: { type: 'text', size: 'large', text: '01 · Stone', x: 0, y: 600, wrap: 400 },
+      g1b: { type: 'text', size: 'body', text: 'Bram × Tusk', x: 0, y: 650, wrap: 400 },
+      g2: { type: 'text', size: 'large', text: '02 · Tide', x: 0, y: 1000, wrap: 400 },
+      g2b: { type: 'text', size: 'body', text: 'Mira × Fen', x: 0, y: 1050, wrap: 400 },
+      l1: { type: 'text', size: 'large', text: 'Two Houses: Ash, Brook.', x: 600, y: 600, wrap: 500 },
+    },
+  };
+  const result = importClaudeWhiteboard(doc, { worldId: 'headingland', at: '2026-01-02' });
+
+  it('links gates and houses part-of heading concepts regardless of creation order', () => {
+    expect(result.graph.nodes.find((n) => n.title === 'Two Gates')?.kind).toBe('concept');
+    expect(hasEdge(result, 'Stone Gate', 'part-of', 'Two Gates')).toBe(true);
+    expect(hasEdge(result, 'Tide Gate', 'part-of', 'Two Gates')).toBe(true);
+    expect(hasEdge(result, 'House Ash', 'part-of', 'Two Houses')).toBe(true);
+    expect(hasEdge(result, 'House Brook', 'part-of', 'Two Houses')).toBe(true);
+    expect(result.report.warnings.filter((w) => /no matching group concept/.test(w))).toEqual([]);
+  });
+
+  it('is deterministic', () => {
+    expect(JSON.stringify(importClaudeWhiteboard(doc, { worldId: 'headingland', at: '2026-01-02' }).graph)).toBe(JSON.stringify(result.graph));
+  });
+});

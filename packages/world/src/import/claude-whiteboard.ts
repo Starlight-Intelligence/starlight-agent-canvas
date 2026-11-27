@@ -596,10 +596,15 @@ export function importClaudeWhiteboard(input: unknown, options: ImportOptions = 
 
   const findGroupConcept = (pattern: RegExp): WorldNode | undefined =>
     nodes.find((node) => node.kind === 'concept' && pattern.test(node.title));
+  // Group concepts can be pills (step 4) or headings (step 8), so part-of links
+  // are resolved only once every node exists. Deferred in source order, which
+  // keeps edge output deterministic.
+  const houseLists: Array<{ label: string; key: string; pattern: RegExp }> = [];
+  const groupLinks: Array<{ childId: string; pattern: RegExp }> = [];
 
   // ---------- 5. Gates ----------
   const gateHeadings = texts.filter((el) => !consumed(el) && el.size === 'large' && GATE_RE.test(el.text!.trim()));
-  const gatesGroup = findGroupConcept(/^\S+\s+gates$/i);
+  const gatesPattern = /^\S+\s+gates$/i;
   for (const heading of gateHeadings) {
     const match = heading.text!.trim().match(GATE_RE)!;
     const number = Number(match[1]);
@@ -641,7 +646,7 @@ export function importClaudeWhiteboard(input: unknown, options: ImportOptions = 
     disposition.set(heading.key, { as: 'node', nodeId: gate.id });
     headingEntity.set(heading.key, gate.id);
     if (domain) disposition.set(domain.key, { as: 'merged', into: gate.id, role: 'gate summary' });
-    if (gatesGroup) addEdge(gate.id, gatesGroup.id, 'part-of');
+    groupLinks.push({ childId: gate.id, pattern: gatesPattern });
 
     if (pair && names.length > 0) {
       const created: string[] = [];
@@ -691,7 +696,7 @@ export function importClaudeWhiteboard(input: unknown, options: ImportOptions = 
     const items = match[2].split(',').map((item) => item.trim()).filter(Boolean);
     if (items.length < 2) continue;
     const label = match[1].trim();
-    const group = findGroupConcept(new RegExp(`^${escapeRegExp(label)}$`, 'i'));
+    const groupPattern = new RegExp(`^${escapeRegExp(label)}$`, 'i');
     const created: string[] = [];
     items.forEach((item, index) => {
       const title = /^house\b/i.test(item) ? item : `House ${item}`;
@@ -709,9 +714,9 @@ export function importClaudeWhiteboard(input: unknown, options: ImportOptions = 
         mentionable: true,
       });
       created.push(house.id);
-      if (group) addEdge(house.id, group.id, 'part-of');
+      groupLinks.push({ childId: house.id, pattern: groupPattern });
     });
-    if (!group) warnings.push(`List "${label}" (${el.key}) has no matching group concept; houses are unlinked.`);
+    houseLists.push({ label, key: el.key, pattern: groupPattern });
     disposition.set(el.key, { as: 'expanded', nodeIds: created });
   }
 
@@ -757,6 +762,14 @@ export function importClaudeWhiteboard(input: unknown, options: ImportOptions = 
     disposition.set(heading.key, { as: 'node', nodeId: node.id });
     headingEntity.set(heading.key, node.id);
     if (below) disposition.set(below.key, { as: 'merged', into: node.id, role: 'summary' });
+  }
+
+  for (const link of groupLinks) {
+    const group = findGroupConcept(link.pattern);
+    if (group) addEdge(link.childId, group.id, 'part-of');
+  }
+  for (const list of houseLists) {
+    if (!findGroupConcept(list.pattern)) warnings.push(`List "${list.label}" (${list.key}) has no matching group concept; houses are unlinked.`);
   }
 
   // ---------- 9. Bullet lists ----------
