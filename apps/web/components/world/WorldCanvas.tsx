@@ -5,14 +5,14 @@ import {
   Background,
   BackgroundVariant,
   MiniMap,
+  NodeChangeset,
   ReactFlow,
   ReactFlowProvider,
-  applyNodeChanges,
   useReactFlow,
   type Connection,
   type Edge,
   type Node,
-  type NodeChange,
+  type OnNodesChange,
   type Viewport,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
@@ -520,10 +520,10 @@ function WorldCanvasInner({ worldId, stressNodes }: { worldId: string; stressNod
     return out;
   }, [view, timeline, tiles, level, renderedIds, selectedId, focusSet, visibleWorldNodes]);
 
-  const onNodesChange = useCallback((changes: NodeChange[]) => {
+  const onNodesChange: OnNodesChange = useCallback((changes) => {
     // Selection and removal are driven by this component, not by xyflow.
-    const allowed = changes.filter((c) => c.type !== 'select' && c.type !== 'remove');
-    if (allowed.length) setRfNodes((nds) => applyNodeChanges(allowed, nds));
+    const allowed = changes.toArray().filter((c) => c.type !== 'select' && c.type !== 'remove');
+    if (allowed.length) setRfNodes((nds) => new NodeChangeset(allowed).applyTo(nds));
   }, []);
 
   const runOps = useCallback(async (ops: unknown[]) => {
@@ -854,7 +854,7 @@ function WorldCanvasInner({ worldId, stressNodes }: { worldId: string; stressNod
             disableKeyboardA11y
             zoomOnDoubleClick={false}
             proOptions={{ hideAttribution: true }}
-            colorMode="dark"
+            className="dark"
             defaultEdgeOptions={{ type: 'default' }}
           >
             <Background id="wc-dots" variant={BackgroundVariant.Dots} gap={24} size={1.2} color="rgba(255,255,255,0.09)" bgColor="#09090b" />

@@ -1,7 +1,7 @@
 'use client';
 
 import { memo, type CSSProperties } from 'react';
-import { Handle, Position, useStore, type Node, type NodeProps, type ReactFlowState } from '@xyflow/react';
+import { Handle, Position, useViewportStore, type Node, type NodeProps, type ViewportStore } from '@xyflow/react';
 import { NODE_KINDS, semanticZoomLevel } from '@starlight-agent-canvas/world';
 import type { CanonStatus, NodeKind, SemanticZoomLevel, WorldNode } from '@starlight-agent-canvas/world';
 import { hexToRgba } from '@/lib/world/tints';
@@ -24,12 +24,12 @@ export type RegionNodeData = {
 };
 export type RegionFlowNode = Node<RegionNodeData, 'region'>;
 
-const zoomSelector = (s: ReactFlowState) => s.transform[2];
-const levelSelector = (s: ReactFlowState) => semanticZoomLevel(s.transform[2] > 0 ? s.transform[2] : 1);
+const zoomSelector = (s: ViewportStore) => s.transform[2];
+const levelSelector = (s: ViewportStore) => semanticZoomLevel(s.transform[2] > 0 ? s.transform[2] : 1);
 
 /** Re-renders only when the zoom crosses a semantic threshold, not on every zoom tick. */
 export function useSemanticLevel(): SemanticZoomLevel {
-  return useStore(levelSelector);
+  return useViewportStore(levelSelector);
 }
 
 const CANON_LABEL: Record<CanonStatus, string> = { draft: 'Draft', proposed: 'Proposed', canon: 'Canon' };
@@ -167,7 +167,7 @@ function makeNodeComponent(kind: NodeKind) {
 }
 
 function RegionNodeComponent({ data, width, height }: NodeProps<RegionFlowNode>) {
-  const zoom = useStore(zoomSelector);
+  const zoom = useViewportStore(zoomSelector);
   const level = semanticZoomLevel(zoom > 0 ? zoom : 1);
   const showCluster = data.mode === 'map' || level === 'cluster';
   // Labels hold a steady on-screen size while the region scales with zoom, but

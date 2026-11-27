@@ -9,13 +9,12 @@ import {
   Position,
   ReactFlow,
   ReactFlowProvider,
-  applyNodeChanges,
   useReactFlow,
   type Connection,
   type Edge,
   type Node,
-  type NodeChange,
   type NodeProps,
+  type OnNodesChange,
   type OnSelectionChangeParams,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
@@ -2185,8 +2184,8 @@ function WorkspaceInner() {
     setSelectedIds(params.nodes.map((node) => node.id));
   }, []);
 
-  const onNodesChange = useCallback((changes: NodeChange<Node<AgentNodeData>>[]) => {
-    setFlowNodes((nodes) => applyNodeChanges(changes, nodes));
+  const onNodesChange: OnNodesChange<Node<AgentNodeData>> = useCallback((changes) => {
+    setFlowNodes((nodes) => changes.applyTo(nodes));
   }, []);
 
   const persistNodePosition = useCallback(async (_event: unknown, node: Node<AgentNodeData>) => {
