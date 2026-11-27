@@ -320,6 +320,11 @@ const KIND_STYLE: Record<CanvasNodeKind, { label: string; accent: string; bg: st
   mcp_tool: { label: 'MCP', accent: '#6EA8FE', bg: 'rgba(110,168,254,0.08)' },
   agent_run: { label: 'Run', accent: '#79E6C5', bg: 'rgba(121,230,197,0.08)' },
   output: { label: 'Output', accent: '#6EA8FE', bg: 'rgba(110,168,254,0.1)' },
+  llm_council: { label: 'Council', accent: '#38BDF8', bg: 'rgba(56,189,248,0.1)' },
+  image_gen: { label: 'Image Gen', accent: '#C084FC', bg: 'rgba(192,132,252,0.1)' },
+  video_gen: { label: 'Video Gen', accent: '#FB7185', bg: 'rgba(251,113,133,0.1)' },
+  audio_voice: { label: 'Voice/Audio', accent: '#34D399', bg: 'rgba(52,211,153,0.1)' },
+  taste_gate: { label: 'Taste Gate', accent: '#FBBF24', bg: 'rgba(251,191,36,0.1)' },
 };
 
 const ACTIONS: Array<{ id: CanvasActionType; label: string }> = [
@@ -390,6 +395,14 @@ function AgentNode({ id, data, selected }: NodeProps<Node<AgentNodeData>>) {
       </div>
       <div className="space-y-2 px-3 py-3">
         <h3 className="line-clamp-2 text-sm font-semibold text-starlight-ink">{data.title}</h3>
+        {typeof data.metadata.provider === 'string' ? (
+          <div className="flex items-center justify-between gap-2 text-[10px] text-starlight-muted">
+            <span className="truncate rounded border border-white/10 bg-white/5 px-1.5 py-0.5">{data.metadata.provider}</span>
+            {typeof (data.metadata.lastExecution as { status?: string } | undefined)?.status === 'string' ? (
+              <span className="text-starlight-mint">{(data.metadata.lastExecution as { status: string }).status}</span>
+            ) : null}
+          </div>
+        ) : null}
         {imageSrc ? (
           <img
             src={imageSrc}
@@ -2003,6 +2016,30 @@ function WorkspaceInner() {
     }
   }, [canvas, focusNode, refreshList, selectedIds]);
 
+  const runNodeflow = useCallback(async (nodeIds = selectedIds) => {
+    if (!canvas) return;
+    setBusy(true);
+    try {
+      const outcome = await api<{
+        canvas?: CanvasRecord;
+        result?: { status: string; mode: string; steps: Array<{ status: string }> };
+      }>(`/api/canvases/${canvas.id}/nodeflow`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ nodeIds, mode: 'dry_run', maxCostUsd: 0.5 }),
+      });
+      if (outcome.canvas) setCanvas(outcome.canvas);
+      await refreshList();
+      const completed = outcome.result?.steps.filter((s) => s.status === 'completed').length ?? 0;
+      const total = outcome.result?.steps.length ?? 0;
+      setStatus(`Nodeflow ${outcome.result?.status ?? 'completed'} (${completed}/${total} steps, dry-run).`);
+    } catch (error) {
+      setStatus((error as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }, [canvas, refreshList, selectedIds]);
+
   const askCanvas = useCallback(async () => {
     if (!canvas?.nodes.length) {
       requestComposerInput('source');
@@ -2449,7 +2486,7 @@ function WorkspaceInner() {
                 onChange={(event) => setNoteKind(event.target.value as CanvasNodeKind)}
                 className="w-full rounded-md border border-starlight-border bg-starlight-panel px-3 py-2 text-sm text-starlight-ink"
               >
-                {(['note', 'prompt', 'mcp_tool', 'agent_run'] satisfies CanvasNodeKind[]).map((kind) => (
+                {(['note', 'prompt', 'mcp_tool', 'agent_run', 'llm_council', 'image_gen', 'video_gen', 'audio_voice', 'taste_gate'] satisfies CanvasNodeKind[]).map((kind) => (
                   <option key={kind} value={kind}>{formatKind(kind)}</option>
                 ))}
               </select>
@@ -3885,6 +3922,16 @@ function WorkspaceInner() {
                     {action.label}
                   </button>
                 ))}
+                <button
+                  data-testid="run-nodeflow"
+                  type="button"
+                  disabled={!canMutate}
+                  onClick={() => runNodeflow()}
+                  className="col-span-2 flex items-center justify-center gap-2 rounded-md border border-starlight-mint/45 bg-starlight-mint/15 px-3 py-2 text-xs font-semibold text-starlight-mint transition hover:border-starlight-mint disabled:cursor-not-allowed disabled:opacity-45"
+                >
+                  <Network className="h-3.5 w-3.5" aria-hidden="true" />
+                  Run Multimodal Nodeflow (Dry-Run)
+                </button>
               </div>
             </section>
 

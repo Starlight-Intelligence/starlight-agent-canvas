@@ -18,6 +18,11 @@ export const nodeKindSchema = z.enum([
   'mcp_tool',
   'agent_run',
   'output',
+  'llm_council',
+  'image_gen',
+  'video_gen',
+  'audio_voice',
+  'taste_gate',
 ]);
 
 export const edgeKindSchema = z.enum([
@@ -77,7 +82,19 @@ export const sourceChunkSchema = z.object({
 
 export const canvasArtifactSchema = z.object({
   id: z.string().min(1),
-  kind: z.enum(['url', 'pdf', 'youtube', 'video', 'image', 'markdown', 'json', 'manual']),
+  kind: z.enum([
+    'url',
+    'pdf',
+    'youtube',
+    'video',
+    'image',
+    'audio',
+    'council_verdict',
+    'provenance',
+    'markdown',
+    'json',
+    'manual',
+  ]),
   title: z.string().min(1),
   body: z.string().default(''),
   source: z.string().optional(),
@@ -114,7 +131,19 @@ export const canvasIntakeTraceItemSchema = z.object({
   title: z.string().min(1),
   nodeId: z.string().min(1).optional(),
   artifactId: z.string().min(1).optional(),
-  artifactKind: z.enum(['url', 'pdf', 'youtube', 'video', 'image', 'markdown', 'json', 'manual']).optional(),
+  artifactKind: z.enum([
+    'url',
+    'pdf',
+    'youtube',
+    'video',
+    'image',
+    'audio',
+    'council_verdict',
+    'provenance',
+    'markdown',
+    'json',
+    'manual',
+  ]).optional(),
   readinessStatus: z.enum(['ready', 'needs_context', 'reference_only']).optional(),
   readinessLabel: z.string().optional(),
   source: z.string().optional(),
@@ -162,6 +191,9 @@ export const createCanvasInputSchema = z.object({
     'repo_product_planning',
     'agent_workflow_design',
     'content_synthesis',
+    'brand_campaign_pipeline',
+    'multi_llm_architecture_review',
+    'knowledge_distillation_studio',
   ]).default('blank'),
 });
 
@@ -220,6 +252,95 @@ export const runActionInputSchema = z.object({
   prompt: z.string().default(''),
 });
 
+export const mediaNodeKindSchema = z.enum([
+  'llm_council',
+  'image_gen',
+  'video_gen',
+  'audio_voice',
+  'taste_gate',
+]);
+
+export const mediaProviderSchema = z.enum([
+  'gemini-nanobanana',
+  'fal',
+  'replicate',
+  'muapi',
+  'veo',
+  'kling',
+  'runway',
+  'remotion',
+  'elevenlabs',
+  'suno',
+  'cloudflare-council',
+  'local-dry-run',
+  'higgsfield',
+]);
+
+export const nodeflowExecutionModeSchema = z.enum(['dry_run', 'live']);
+
+export const upsertMediaNodeInputSchema = z.object({
+  nodeId: z.string().min(1).optional(),
+  kind: mediaNodeKindSchema,
+  title: z.string().min(1),
+  body: z.string().default(''),
+  provider: mediaProviderSchema.optional(),
+  position: positionSchema.optional(),
+  metadata: z.record(z.string(), z.unknown()).default({}),
+});
+
+export const nodeflowRunRequestSchema = z.object({
+  nodeIds: z.array(z.string().min(1)).default([]),
+  mode: nodeflowExecutionModeSchema.default('dry_run'),
+  maxCostUsd: z.number().positive().max(5).default(0.5),
+  consentVerified: z.boolean().default(false),
+});
+
+export const nodeflowStepReceiptSchema = z.object({
+  nodeId: z.string().min(1),
+  nodeTitle: z.string().min(1),
+  kind: nodeKindSchema,
+  provider: z.string().min(1),
+  status: z.enum(['completed', 'skipped', 'failed']),
+  mode: nodeflowExecutionModeSchema,
+  estimatedCostUsd: z.number().nonnegative(),
+  summary: z.string(),
+  artifactId: z.string().optional(),
+  r2Key: z.string().optional(),
+  pollHandle: z.string().optional(),
+  tasteScore: z.number().min(0).max(100).optional(),
+  error: z.string().optional(),
+});
+
+export const r2BundleManifestSchema = z.object({
+  schemaVersion: z.literal('starlight.r2Bundle.v1'),
+  canvasId: canvasIdSchema,
+  canvasTitle: z.string().min(1),
+  r2Prefix: z.string().min(1),
+  graphSha256: z.string().regex(/^[a-f0-9]{64}$/),
+  createdAt: z.string().datetime(),
+  nodeCount: z.number().int().nonnegative(),
+  artifactCount: z.number().int().nonnegative(),
+  artifacts: z.array(z.object({
+    id: z.string().min(1),
+    kind: z.string().min(1),
+    title: z.string().min(1),
+    r2Key: z.string().min(1),
+    sha256: z.string().regex(/^[a-f0-9]{64}$/),
+    bytes: z.number().int().nonnegative(),
+  })),
+});
+
+export const nodeflowRunResultSchema = z.object({
+  executionId: z.string().min(1),
+  mode: nodeflowExecutionModeSchema,
+  status: z.enum(['completed', 'partial', 'failed']),
+  orderedNodeIds: z.array(z.string()),
+  steps: z.array(nodeflowStepReceiptSchema),
+  totalEstimatedCostUsd: z.number().nonnegative(),
+  budgetCapUsd: z.number().positive(),
+  r2Manifest: r2BundleManifestSchema,
+});
+
 export type CanvasNodeKind = z.infer<typeof nodeKindSchema>;
 export type CanvasEdgeKind = z.infer<typeof edgeKindSchema>;
 export type CanvasActionType = z.infer<typeof actionTypeSchema>;
@@ -243,3 +364,11 @@ export type SourceEnrichmentKind = z.infer<typeof sourceEnrichmentKindSchema>;
 export type EnrichSourceInput = z.input<typeof enrichSourceInputSchema>;
 export type ConnectNodesInput = z.infer<typeof connectNodesInputSchema>;
 export type RunActionInput = z.input<typeof runActionInputSchema>;
+export type MediaNodeKind = z.infer<typeof mediaNodeKindSchema>;
+export type MediaProvider = z.infer<typeof mediaProviderSchema>;
+export type NodeflowExecutionMode = z.infer<typeof nodeflowExecutionModeSchema>;
+export type UpsertMediaNodeInput = z.input<typeof upsertMediaNodeInputSchema>;
+export type NodeflowRunRequest = z.input<typeof nodeflowRunRequestSchema>;
+export type NodeflowStepReceipt = z.infer<typeof nodeflowStepReceiptSchema>;
+export type R2BundleManifest = z.infer<typeof r2BundleManifestSchema>;
+export type NodeflowRunResult = z.infer<typeof nodeflowRunResultSchema>;
