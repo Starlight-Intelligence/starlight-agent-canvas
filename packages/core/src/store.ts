@@ -662,16 +662,20 @@ export class FileCanvasStore {
   async upsertMediaNode(canvasId: string, input: UpsertMediaNodeInput): Promise<{ canvas: CanvasRecord; node: CanvasNode; action: 'created' | 'updated' }> {
     return this.withCanvasLock(canvasId, async (safeCanvasId) => {
       const parsed = upsertMediaNodeInputSchema.parse(input);
+      const safeNodeId = parsed.nodeId ? canvasIdSchema.parse(parsed.nodeId) : undefined;
       const canvas = await this.getCanvas(safeCanvasId);
       const timestamp = nowIso();
       const metadata = {
         ...parsed.metadata,
         ...(parsed.provider ? { provider: parsed.provider } : {}),
       };
-      if (parsed.nodeId) {
-        const idx = canvas.nodes.findIndex((n) => n.id === parsed.nodeId);
+      if (safeNodeId) {
+        const idx = canvas.nodes.findIndex((n) => n.id === safeNodeId);
         if (idx >= 0) {
           const existing = canvas.nodes[idx];
+          if (existing.metadata.websiteProjectionOf || existing.metadata.role === WEBSITE_ROLE) {
+            throw new Error('Edit website content in the website direction workbench.');
+          }
           const updated: CanvasNode = {
             ...existing,
             kind: parsed.kind,
@@ -688,7 +692,7 @@ export class FileCanvasStore {
         }
       }
       const node: CanvasNode = {
-        id: parsed.nodeId ?? makeId('node', parsed.title),
+        id: safeNodeId ?? makeId('node', parsed.title),
         kind: parsed.kind,
         title: parsed.title,
         body: parsed.body,

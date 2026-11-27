@@ -192,11 +192,11 @@ function validateNodeGates(ctx: NodeflowAdapterContext): void {
   }
 
   // ElevenLabs server-side consent gate (@starlight-intelligence/elevenlabs contract)
+  // Never trust node metadata alone; require explicit server-side consentVerified === true.
   if (ctx.node.kind === 'audio_voice' && provider === 'elevenlabs' && ctx.mode === 'live') {
-    const nodeConsent = ctx.node.metadata.consentVerified === true;
-    if (!ctx.consentVerified && !nodeConsent) {
+    if (!ctx.consentVerified) {
       throw new Error(
-        `ElevenLabs live synthesis on '${ctx.node.title}' failed closed: consentVerified must be true.`,
+        `ElevenLabs live synthesis on '${ctx.node.title}' failed closed: server-side consentVerified must be true.`,
       );
     }
   }

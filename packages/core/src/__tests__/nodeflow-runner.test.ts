@@ -66,7 +66,8 @@ describe('nodeflow runner and multimodal templates', () => {
     expect(denied.result.steps[0].error).toMatch(/\/hf-plan/i);
     expect(denied.result.steps[1].error).toMatch(/consentVerified/i);
 
-    const canvasWithConsent = await store.upsertMediaNode(created.id, {
+    // Metadata flag alone must NOT bypass server-side consent gate
+    const spoofed = await store.upsertMediaNode(created.id, {
       nodeId: denied.canvas.nodes[1].id,
       kind: 'audio_voice',
       title: 'ElevenLabs live voice',
@@ -74,9 +75,18 @@ describe('nodeflow runner and multimodal templates', () => {
       provider: 'elevenlabs',
       metadata: { consentVerified: true },
     });
-    const allowedVoiceOnly = await store.runNodeflow(created.id, {
-      nodeIds: [canvasWithConsent.node.id],
+    const stillDenied = await store.runNodeflow(created.id, {
+      nodeIds: [spoofed.node.id],
       mode: 'live',
+      consentVerified: false,
+    });
+    expect(stillDenied.result.status).toBe('failed');
+    expect(stillDenied.result.steps[0].error).toMatch(/consentVerified/i);
+
+    const allowedVoiceOnly = await store.runNodeflow(created.id, {
+      nodeIds: [spoofed.node.id],
+      mode: 'live',
+      consentVerified: true,
     });
     expect(allowedVoiceOnly.result.status).toBe('completed');
     expect(allowedVoiceOnly.result.steps[0].r2Key).toContain('media/audio');
