@@ -214,6 +214,7 @@ const RETRY_NOTE = 'Retrying openCanonPr with the same proposal is safe: it firs
 /**
  * Executes the plan. It is idempotent per proposal: it first looks for an open
  * PR from the proposal's branch and returns it (reused: true) without writing,
+ * provided it is still a draft into the expected base (else PR_NOT_REUSABLE),
  * and stops with BRANCH_EXISTS if the branch exists without an open PR. Only
  * then: branch, existence check, new file, draft PR. The token
  * comes only from `getToken`, is used only in the Authorization header, and is
@@ -338,6 +339,18 @@ export async function openCanonPr(proposal: CanonProposalFile, options: OpenCano
     const prNumber = pr.number;
     if (typeof prNumber !== 'number' || !Number.isSafeInteger(prNumber) || prNumber <= 0 || !isExpectedPrUrl(pr.html_url, prNumber)) {
       throw new CanonPrError('INVALID_RESPONSE', 'find-pr', `GitHub listed an open PR from ${fixed.branch} without a valid number and URL.`);
+    }
+    // Only a PR this flow could have opened is reused: still a draft, into the
+    // expected reviewed base. Anything else (marked ready, retargeted to a
+    // canon/ or other branch) fails closed; nothing is written either way.
+    const prBase = asRecord(pr.base).ref;
+    if (pr.draft !== true) {
+      throw new CanonPrError('PR_NOT_REUSABLE', 'find-pr',
+        `Open PR #${prNumber} from ${fixed.branch} is no longer a draft, so it is not reused and nothing was written. Review it by hand, or close it and retry.`);
+    }
+    if (!isReviewedBase(prBase) || prBase !== base) {
+      throw new CanonPrError('PR_NOT_REUSABLE', 'find-pr',
+        `Open PR #${prNumber} from ${fixed.branch} targets ${typeof prBase === 'string' ? prBase : 'an unknown base'}, not ${base}, so it is not reused and nothing was written. Retarget it to ${base} or close it and retry.`);
     }
     return { prUrl: pr.html_url as string, prNumber, branch: fixed.branch, path: fixed.path, calls, reused: true };
   }

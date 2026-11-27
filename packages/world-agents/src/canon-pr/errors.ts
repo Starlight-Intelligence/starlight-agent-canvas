@@ -81,6 +81,7 @@ export type CanonPrErrorCode =
   | 'BRANCH_EXISTS'
   | 'BRANCH_REF_INVALID'
   | 'FILE_EXISTS'
+  | 'PR_NOT_REUSABLE'
   | 'INVALID_RESPONSE';
 
 /** One GitHub request that got a response. Never includes headers or the token. */

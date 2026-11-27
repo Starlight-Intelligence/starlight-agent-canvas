@@ -588,7 +588,30 @@ describe('idempotency per proposal', () => {
   const openPr = (n: number, branch = 'canon/the-glass-orchard', fullName = 'Arcanea-Labs/arcanea-ai-app') => ({
     number: n,
     html_url: `https://github.com/${fullName}/pull/${n}`,
+    draft: true,
     head: { ref: branch, repo: { full_name: fullName } },
+    base: { ref: 'trunk', repo: { full_name: fullName } },
+  });
+
+  it.each([
+    ['no longer a draft', { draft: false }],
+    ['missing the draft flag', { draft: undefined }],
+    ['based on a canon/ branch', { base: { ref: 'canon/other', repo: { full_name: 'Arcanea-Labs/arcanea-ai-app' } } }],
+    ['based on a branch other than the expected base', { base: { ref: 'release', repo: { full_name: 'Arcanea-Labs/arcanea-ai-app' } } }],
+    ['missing its base', { base: undefined }],
+  ])('refuses to reuse an open PR that is %s, failing closed without writing', async (_label, change) => {
+    const gh = github({ 'find-pr': { status: 200, json: [{ ...openPr(41), ...change }] } });
+    const error = await caught(openCanonPr(proposal, { ...target, getToken: () => TOKEN, fetch: gh.fetch }));
+    expect(error).toMatchObject({ code: 'PR_NOT_REUSABLE', step: 'find-pr' });
+    expect(error.message).toContain('#41');
+    expect(gh.calls.map((c) => c.step)).toEqual(['get-repo', 'find-pr']);
+    expect(gh.calls.some((c) => c.method !== 'GET')).toBe(false);
+  });
+
+  it('reuses an open draft PR whose base is the explicit base', async () => {
+    const gh = github({ 'find-pr': { status: 200, json: [{ ...openPr(41), base: { ref: 'main', repo: { full_name: 'Arcanea-Labs/arcanea-ai-app' } } }] } });
+    const result = await openCanonPr(proposal, { ...target, base: 'main', getToken: () => TOKEN, fetch: gh.fetch });
+    expect(result).toMatchObject({ prNumber: 41, reused: true });
   });
 
   it('returns the open PR an earlier run opened, and writes nothing', async () => {
