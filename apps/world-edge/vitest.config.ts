@@ -50,7 +50,7 @@ export default defineConfig(async () => {
       }),
     ],
     test: {
-      include: [path.join(root, 'test/**/*.test.ts')],
+      include: [path.posix.join(root.replace(/\\/g, '/'), 'test/**/*.test.ts')],
       setupFiles: [path.join(root, 'test/setup.ts')],
       testTimeout: 20_000,
       teardownTimeout: 60_000,

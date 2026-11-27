@@ -104,7 +104,7 @@ export function buildWorldMcpServer(env: Env, principal: Principal): McpServer {
   }));
 
   server.registerTool('add_node', {
-    description: 'Create a draft node. canon may be draft or proposed, never canon. id is generated when omitted.',
+    description: 'Create a draft node. Takes no canon field: every node starts as draft. To propose nodes for canon, call propose_canon, which records the proposal. id is generated when omitted.',
     inputSchema: TOOL_INPUTS.add_node,
     annotations: WRITE,
   }, scoped('add_node', async ({ worldId, node }) => {

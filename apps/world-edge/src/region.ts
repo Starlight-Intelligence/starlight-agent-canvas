@@ -5,6 +5,7 @@ import {
   semanticZoomLevel,
   TILE_SIZE,
   tileKeysForBounds,
+  WORLD_TOOL_LIMITS,
   type Bounds,
   type SemanticZoomLevel,
   type WorldEdge,
@@ -17,7 +18,7 @@ export const REGION_LIMITS = {
   /** Tiles a single query may touch (32 x 32 tiles = 65k x 65k world units). */
   maxTiles: 1024,
   defaultNodes: 2000,
-  maxNodes: 5000,
+  maxNodes: WORLD_TOOL_LIMITS.regionMaxNodes,
   maxEdges: 20_000,
 } as const;
 
