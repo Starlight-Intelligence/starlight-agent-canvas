@@ -13,3 +13,4 @@ export {
   type ImportResult,
 } from './import/claude-whiteboard.js';
 export * from './tools.js';
+export * from './vis-media-bridge.js';
