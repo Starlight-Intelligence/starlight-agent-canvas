@@ -12,8 +12,8 @@ export const dynamic = 'force-dynamic';
  */
 const MAX_BODY_BYTES = 256 * 1024;
 
-const tooLarge = (message: string) =>
-  NextResponse.json({ ok: false, error: { code: 'INVALID_OP', message } }, { status: 413 });
+const tooLarge = (message: string, detail: { limit?: number; received?: number } = {}) =>
+  NextResponse.json({ ok: false, error: { code: 'INVALID_OP', message, ...detail } }, { status: 413 });
 
 /**
  * Applies a GraphOp batch to the local world. The browser has no authenticated
@@ -43,7 +43,14 @@ export async function POST(request: Request, context: { params: Promise<{ worldI
   if (!body || !Array.isArray(body.ops)) {
     return NextResponse.json({ ok: false, error: { code: 'INVALID_OP', message: 'Body must be { ops: GraphOp[] }.' } }, { status: 400 });
   }
-  if (body.ops.length > LIMITS.opsPerBatchMax) return tooLarge(`A batch may contain at most ${LIMITS.opsPerBatchMax} ops.`);
+  // The byte cap alone admits thousands of small ops; cap the count with the
+  // world package's own limit before taking the world lock or reading the file.
+  if (body.ops.length > LIMITS.opsPerBatchMax) {
+    return tooLarge(`A batch may hold at most ${LIMITS.opsPerBatchMax} ops; received ${body.ops.length}.`, {
+      limit: LIMITS.opsPerBatchMax,
+      received: body.ops.length,
+    });
+  }
   try {
     const result = await applyWorldOps(worldId, body.ops, 'human');
     if (!result.ok) return NextResponse.json({ ok: false, error: result.error }, { status: 409 });

@@ -59,3 +59,34 @@ describe('world ops route body limit', () => {
     expect(res.status).toBe(200);
   });
 });
+
+describe('world ops route op-count limit', () => {
+  it('rejects a batch over the world package opsPerBatchMax with a structured 413 before applying it', async () => {
+    const { LIMITS } = await import('@starlight-agent-canvas/world');
+    const { POST } = await import('@/app/api/worlds/[worldId]/ops/route');
+    applyWorldOps.mockClear();
+    // Small ops: the batch stays far below the 256 KB byte limit.
+    const ops = Array.from({ length: LIMITS.opsPerBatchMax + 1 }, (_, i) => ({ op: 'removeNode', id: `n_${i}` }));
+    const body = JSON.stringify({ ops });
+    expect(body.length).toBeLessThan(LIMIT);
+    const res = await POST(new Request('http://127.0.0.1:3100/api/worlds/w/ops', { method: 'POST', headers: { 'content-type': 'application/json' }, body }), ctx);
+    expect(res.status).toBe(413);
+    const json = (await res.json()) as { ok: boolean; error: { code: string; message: string; limit?: number; received?: number } };
+    expect(json.ok).toBe(false);
+    expect(json.error.code).toBe('INVALID_OP');
+    expect(json.error.message).toMatch(/at most \d+ ops/);
+    expect(json.error.limit).toBe(LIMITS.opsPerBatchMax);
+    expect(json.error.received).toBe(LIMITS.opsPerBatchMax + 1);
+    expect(applyWorldOps).not.toHaveBeenCalled();
+  });
+
+  it('accepts a batch of exactly opsPerBatchMax ops', async () => {
+    const { LIMITS } = await import('@starlight-agent-canvas/world');
+    const { POST } = await import('@/app/api/worlds/[worldId]/ops/route');
+    applyWorldOps.mockClear();
+    const ops = Array.from({ length: LIMITS.opsPerBatchMax }, (_, i) => ({ op: 'removeNode', id: `n_${i}` }));
+    const res = await POST(new Request('http://127.0.0.1:3100/api/worlds/w/ops', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ops }) }), ctx);
+    expect(res.status).toBe(200);
+    expect(applyWorldOps).toHaveBeenCalledTimes(1);
+  });
+});
