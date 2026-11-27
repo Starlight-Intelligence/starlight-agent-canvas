@@ -75,7 +75,7 @@ Canon is never written here. `applyOps` refuses `canon` in any op, `importGraph`
 | `AI` | Workers AI | Embeddings with `@cf/baai/bge-base-en-v1.5` | no; as above |
 | `ACCESS_TEAM_DOMAIN` | var | `https://<team>.cloudflareaccess.com` | for browsers |
 | `ACCESS_AUD` | var | Access application AUD tag | for browsers |
-| `MCP_SERVICE_TOKENS` | secret | JSON array of `{name, harness, sha256}` for MCP clients | for MCP |
+| `MCP_SERVICE_TOKENS` | secret | JSON array of `{name, harness, sha256, worlds?}` for MCP clients; `worlds` limits a token to those world ids (media, `/agents`, MCP tools), omitted means every world | for MCP |
 | `MEDIA_SIGNING_KEY` | secret | HMAC key for signed upload URLs | for uploads |
 
 `wrangler.jsonc` sets `workers_dev: true` and `preview_urls: false`. The D1 id, bucket name and index name are placeholders.

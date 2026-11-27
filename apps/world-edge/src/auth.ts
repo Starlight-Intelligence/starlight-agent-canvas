@@ -1,4 +1,4 @@
-import { harnessSchema } from '@starlight-agent-canvas/world';
+import { harnessSchema, worldIdSchema } from '@starlight-agent-canvas/world';
 import { z } from 'zod';
 import type { Env } from './env.js';
 
@@ -23,6 +23,12 @@ export interface Principal {
    * The hash never leaves the Worker and its Durable Objects.
    */
   tokenSha256?: string;
+  /**
+   * World ids this principal may read and write. Absent means every world
+   * (Access users and unscoped service tokens). Set from the `worlds` field
+   * of the matching MCP_SERVICE_TOKENS entry.
+   */
+  worlds?: readonly string[];
 }
 
 /** Internal header the Worker sets after auth, before forwarding to the Durable Object. */
@@ -39,6 +45,8 @@ const serviceTokenEntrySchema = z.object({
   name: z.string().min(1).max(200),
   harness: harnessSchema,
   sha256: z.string().regex(/^[0-9a-f]{64}$/, 'sha256 must be 64 lowercase hex chars.'),
+  /** Optional allowlist of world ids. Omit for a token that may use every world. */
+  worlds: z.array(worldIdSchema).min(1).max(256).optional(),
 });
 const serviceTokensSchema = z.array(serviceTokenEntrySchema).max(256);
 
@@ -81,7 +89,8 @@ export async function verifyServiceToken(token: string, env: Pick<Env, 'MCP_SERV
   if (!entries) return null;
   const presented = await sha256Hex(token);
   const match = matchTokenHash(presented, entries);
-  return match ? { harness: match.harness, actor: match.name, via: 'service-token', tokenSha256: presented } : null;
+  if (!match) return null;
+  return { harness: match.harness, actor: match.name, via: 'service-token', tokenSha256: presented, ...(match.worlds ? { worlds: [...match.worlds] } : {}) };
 }
 
 /**
@@ -95,9 +104,26 @@ export function principalStillValid(principal: Principal, env: Pick<Env, 'MCP_SE
     if (!principal.tokenSha256) return false;
     const entries = parseServiceTokens(env);
     const match = entries ? matchTokenHash(principal.tokenSha256, entries) : null;
-    return Boolean(match && match.name === principal.actor && match.harness === principal.harness);
+    return Boolean(match && match.name === principal.actor && match.harness === principal.harness && sameWorlds(match.worlds, principal.worlds));
   }
   return true;
+}
+
+function sameWorlds(a: readonly string[] | undefined, b: readonly string[] | undefined): boolean {
+  if (!a || !b) return a === b;
+  return a.length === b.length && [...a].sort().join('\n') === [...b].sort().join('\n');
+}
+
+/** May `principal` read or write `worldId`? Unscoped principals may use every world. */
+export function canAccessWorld(principal: Principal, worldId: string): boolean {
+  return principal.worlds === undefined || principal.worlds.includes(worldId);
+}
+
+export function worldForbidden(worldId: string): Response {
+  return Response.json(
+    { error: { code: 'WORLD_FORBIDDEN', message: `This credential is not authorized for world "${worldId}".` } },
+    { status: 403 },
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -312,6 +338,7 @@ const principalSchema = z.object({
   via: z.enum(['access', 'service-token']),
   expiresAt: z.number().int().positive().optional(),
   tokenSha256: z.string().regex(/^[0-9a-f]{64}$/).optional(),
+  worlds: z.array(worldIdSchema).min(1).max(256).optional(),
 });
 
 export function decodePrincipal(value: string | null): Principal | null {

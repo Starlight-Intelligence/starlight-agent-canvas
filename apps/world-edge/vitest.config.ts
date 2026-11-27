@@ -10,6 +10,8 @@ const root = import.meta.dirname;
 export const TEST_TOKENS = {
   claude: 'test-token-claude-0123456789abcdef',
   codex: 'test-token-codex-0123456789abcdef',
+  /** Scoped to the world "scoped-world" only. */
+  scoped: 'test-token-scoped-0123456789abcdef',
 } as const;
 
 const sha = (value: string) => createHash('sha256').update(value).digest('hex');
@@ -30,6 +32,7 @@ export default defineConfig(async () => {
             MCP_SERVICE_TOKENS: JSON.stringify([
               { name: 'claude-test', harness: 'claude', sha256: sha(TEST_TOKENS.claude) },
               { name: 'codex-test', harness: 'codex', sha256: sha(TEST_TOKENS.codex) },
+              { name: 'scoped-test', harness: 'codex', sha256: sha(TEST_TOKENS.scoped), worlds: ['scoped-world'] },
             ]),
             MEDIA_SIGNING_KEY: 'test-only-media-signing-key',
           },

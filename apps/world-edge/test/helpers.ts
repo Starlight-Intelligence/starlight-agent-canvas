@@ -4,7 +4,7 @@ import type { D1Migration } from 'cloudflare:test';
 import type { Principal } from '../src/auth.js';
 
 /** Test-only bindings added in vitest.config.ts. */
-export const testEnv = env as typeof env & { TEST_MIGRATIONS: D1Migration[]; TEST_TOKENS: { claude: string; codex: string } };
+export const testEnv = env as typeof env & { TEST_MIGRATIONS: D1Migration[]; TEST_TOKENS: { claude: string; codex: string; scoped: string } };
 
 export const claude: Principal = { harness: 'claude', actor: 'claude-test', via: 'service-token' };
 export const codex: Principal = { harness: 'codex', actor: 'codex-test', via: 'service-token' };

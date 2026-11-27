@@ -1,6 +1,6 @@
 import { slugify, worldIdSchema } from '@starlight-agent-canvas/world';
 import { z } from 'zod';
-import type { Principal } from './auth.js';
+import { canAccessWorld, worldForbidden, type Principal } from './auth.js';
 import type { Env } from './env.js';
 
 /** Content types accepted for world media (images and manuscripts). */
@@ -55,6 +55,7 @@ export async function signUpload(request: Request, env: Env, principal: Principa
   const parsed = signUploadInput.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return json({ error: { code: 'INVALID_INPUT', message: parsed.error.issues[0]?.message ?? 'Invalid input.' } }, 400);
   const { worldId, filename, contentType } = parsed.data;
+  if (!canAccessWorld(principal, worldId)) return worldForbidden(worldId);
   const dot = filename.lastIndexOf('.');
   const ext = dot > 0 ? slugify(filename.slice(dot + 1), 8) : '';
   const base = slugify(dot > 0 ? filename.slice(0, dot) : filename, 60) || 'file';
@@ -109,8 +110,8 @@ export async function receiveUpload(request: Request, env: Env, now = Date.now()
   return json({ key, size: object.size, etag: object.etag });
 }
 
-/** GET /media/object/<key> (authenticated). */
-export async function readMedia(request: Request, env: Env): Promise<Response> {
+/** GET /media/object/<key> (authenticated, and authorized for the world in the key). */
+export async function readMedia(request: Request, env: Env, principal: Principal): Promise<Response> {
   if (!env.WORLD_MEDIA) return json({ error: { code: 'MEDIA_DISABLED', message: 'WORLD_MEDIA is not configured.' } }, 503);
   let key: string;
   try {
@@ -120,6 +121,10 @@ export async function readMedia(request: Request, env: Env): Promise<Response> {
   }
   // Only keys signUpload can mint: worlds/<worldId>/media/<file>.
   if (!MEDIA_KEY_PATTERN.test(key) || key.includes('..')) return json({ error: { code: 'NOT_FOUND', message: 'Not found.' } }, 404);
+  // The world segment is the authorization scope: a credential limited to
+  // one world cannot read another world's objects.
+  const worldId = key.split('/')[1]!;
+  if (!canAccessWorld(principal, worldId)) return worldForbidden(worldId);
   const object = await env.WORLD_MEDIA.get(key);
   if (!object) return json({ error: { code: 'NOT_FOUND', message: 'Not found.' } }, 404);
   const headers = new Headers();
