@@ -1,3 +1,4 @@
+import { LIMITS } from '@starlight-agent-canvas/world';
 import { NextResponse } from 'next/server';
 import { readBodyLimited } from '@/lib/world/read-body';
 import { applyWorldOps, WorldNotFoundError } from '@/lib/world/world-files';
@@ -37,6 +38,19 @@ export async function POST(request: Request, context: { params: Promise<{ worldI
   }
   if (!body || !Array.isArray(body.ops)) {
     return NextResponse.json({ ok: false, error: { code: 'INVALID_OP', message: 'Body must be { ops: GraphOp[] }.' } }, { status: 400 });
+  }
+  // The byte cap alone admits thousands of small ops; cap the count with the
+  // world package's own limit before taking the world lock or reading the file.
+  if (body.ops.length > LIMITS.opsPerBatchMax) {
+    return NextResponse.json({
+      ok: false,
+      error: {
+        code: 'INVALID_OP',
+        message: `A batch may hold at most ${LIMITS.opsPerBatchMax} ops; received ${body.ops.length}.`,
+        limit: LIMITS.opsPerBatchMax,
+        received: body.ops.length,
+      },
+    }, { status: 413 });
   }
   try {
     const result = await applyWorldOps(worldId, body.ops, 'human');
