@@ -1,0 +1,41 @@
+{
+  "name": "@starlight-agent-canvas/world",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "World Graph v1: schemas, op protocol, canon gate and importers for the Starlight world canvas.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./import/claude-whiteboard": {
+      "types": "./dist/import/claude-whiteboard.d.ts",
+      "import": "./dist/import/claude-whiteboard.js"
+    }
+  },
+  "bin": {
+    "starlight-world-import-whiteboard": "./dist/cli/import-whiteboard.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run --dir src",
+    "import:whiteboard": "tsc -p tsconfig.build.json && node dist/cli/import-whiteboard.js"
+  },
+  "dependencies": {
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6"
+  },
+  "files": [
+    "dist",
+    "LICENSE"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.13.0"
+  }
+}
