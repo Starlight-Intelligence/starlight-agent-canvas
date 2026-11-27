@@ -42,6 +42,7 @@
     "world-edge:test": "pnpm --filter @starlight-agent-canvas/world build && pnpm --filter @starlight-agent-canvas/world-edge test",
     "world-edge:dev": "pnpm --filter @starlight-agent-canvas/world build && pnpm --filter @starlight-agent-canvas/world-edge dev",
     "world-edge:dry-run": "pnpm --filter @starlight-agent-canvas/world build && pnpm --filter @starlight-agent-canvas/world-edge dry-run",
+    "world-edge:deploy": "pnpm --filter @starlight-agent-canvas/world build && pnpm --filter @starlight-agent-canvas/world-edge exec wrangler deploy",
     "world:import": "pnpm --filter @starlight-agent-canvas/world build && node packages/world/dist/cli/import-whiteboard.js",
     "mcp:build": "pnpm --filter @starlight-agent-canvas/core build && pnpm --filter @starlight-agent-canvas/mcp build",
     "mcp:config": "node scripts/print-mcp-config.mjs",

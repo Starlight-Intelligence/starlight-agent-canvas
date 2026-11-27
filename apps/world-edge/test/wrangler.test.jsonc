@@ -5,7 +5,7 @@
   "name": "world-edge-test",
   "main": "../src/index.ts",
   "compatibility_date": "2026-06-11",
-  "compatibility_flags": ["nodejs_compat"],
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
   "durable_objects": {
     "bindings": [{ "name": "WorldAgent", "class_name": "WorldAgent" }]
   },
@@ -14,8 +14,11 @@
     { "binding": "WORLD_INDEX", "database_name": "world-index-test", "database_id": "00000000-0000-0000-0000-000000000000", "migrations_dir": "../migrations" }
   ],
   "r2_buckets": [{ "binding": "WORLD_MEDIA", "bucket_name": "world-media-test" }],
+  "kv_namespaces": [{ "binding": "OAUTH_KV", "id": "00000000000000000000000000000000" }],
   "vars": {
     "ACCESS_TEAM_DOMAIN": "https://test-team.cloudflareaccess.com",
-    "ACCESS_AUD": "test-aud"
+    "ACCESS_AUD": "test-aud",
+    // Same as ../wrangler.jsonc. PUBLIC_ORIGIN and the Access secrets are set in ../vitest.config.ts.
+    "OAUTH_REDIRECT_ALLOWLIST": "https://chatgpt.com/connector_platform_oauth_redirect https://chatgpt.com/connector/oauth/* https://claude.ai/api/mcp/auth_callback"
   }
 }

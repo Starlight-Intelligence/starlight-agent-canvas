@@ -2,16 +2,17 @@
 //
 // Nothing here is deployed by this repo's automation. The ids below are
 // placeholders; Frank creates the resources and fills them in (see the
-// DEPLOY section of README.md). No secrets live in this file:
-//   wrangler secret put MCP_SERVICE_TOKENS
-//   wrangler secret put MEDIA_SIGNING_KEY
+// DEPLOY section of README.md). No secrets live in this file; their names are
+// listed under "secrets" below and each is set with `wrangler secret put <NAME>`.
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "world-edge",
   "main": "src/index.ts",
   "compatibility_date": "2026-06-11",
-  // agents/mcp/server uses AsyncLocalStorage.
-  "compatibility_flags": ["nodejs_compat"],
+  // agents/mcp/server uses AsyncLocalStorage. global_fetch_strictly_public
+  // keeps outbound fetches (OAuth client metadata documents) on the public
+  // internet; @cloudflare/workers-oauth-provider needs it for CIMD.
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
 
   // Preview on *.workers.dev only. No preview URLs per version upload.
   "workers_dev": true,
@@ -51,10 +52,43 @@
   // Workers AI, for embeddings (@cf/baai/bge-base-en-v1.5).
   "ai": { "binding": "AI" },
 
+  "kv_namespaces": [
+    // OAuth provider storage (clients, grants, hashed tokens, consent state).
+    // PLACEHOLDER: replace with the id printed by `wrangler kv namespace create OAUTH_KV`.
+    { "binding": "OAUTH_KV", "id": "00000000000000000000000000000000" }
+  ],
+
   "vars": {
     // PLACEHOLDER: your Access team domain and the application AUD tag.
     "ACCESS_TEAM_DOMAIN": "https://YOUR-TEAM.cloudflareaccess.com",
-    "ACCESS_AUD": "REPLACE_WITH_ACCESS_APPLICATION_AUD"
+    "ACCESS_AUD": "REPLACE_WITH_ACCESS_APPLICATION_AUD",
+    // PLACEHOLDER: the public origin of this Worker, e.g. "https://world.example.com"
+    // (https, no path, no trailing slash). It becomes the OAuth issuer, and the
+    // MCP resource is <PUBLIC_ORIGIN>/mcp. The placeholder is not a URL on
+    // purpose: until it is set, /mcp and the OAuth routes answer 500 instead of
+    // running with a wrong origin. Set it to "" to turn OAuth off (bearer-only
+    // /mcp); the ACCESS_* secrets below must still exist for deploy, but any
+    // placeholder value works then because only the OAuth routes read them.
+    "PUBLIC_ORIGIN": "REPLACE_WITH_PUBLIC_ORIGIN",
+    // Redirect URIs that may receive an authorization code. Whitespace or comma
+    // separated: exact https URIs, https prefixes ending in /* (deeper path
+    // segments only), or the token "loopback" for http://localhost|127.0.0.1
+    // [:port]/callback[/<id>]. Empty means no OAuth client can be authorized.
+    "OAUTH_REDIRECT_ALLOWLIST": "https://chatgpt.com/connector_platform_oauth_redirect https://chatgpt.com/connector/oauth/* https://claude.ai/api/mcp/auth_callback"
+  },
+
+  // Every secret the code reads. Deploy fails until all are set, and
+  // `wrangler dev` loads only these names from .dev.vars.
+  "secrets": {
+    "required": [
+      "MCP_SERVICE_TOKENS",
+      "MEDIA_SIGNING_KEY",
+      "ACCESS_CLIENT_ID",
+      "ACCESS_CLIENT_SECRET",
+      "ACCESS_TOKEN_URL",
+      "ACCESS_AUTHORIZATION_URL",
+      "ACCESS_JWKS_URL"
+    ]
   },
 
   "observability": { "enabled": true }

@@ -516,7 +516,7 @@ export class WorldAgent extends Agent<Env, WorldSummaryState> {
   #closeUnauthorizedSockets(): string[] {
     const closed: string[] = [];
     for (const connection of this.getConnections<{ principal?: Principal }>()) {
-      const principal = connection.state?.principal;
+      const principal = connection.state?.principal as Principal | undefined;
       if (principal && principalStillValid(principal, this.env)) continue;
       closed.push(connection.id);
       try {

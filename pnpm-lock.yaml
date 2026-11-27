@@ -88,6 +88,9 @@ importers:
 
   apps/world-edge:
     dependencies:
+      '@cloudflare/workers-oauth-provider':
+        specifier: 1.4.0
+        version: 1.4.0
       '@modelcontextprotocol/server':
         specifier: 2.4.0
         version: 2.4.0
@@ -352,6 +355,9 @@ packages:
     engines: {node: '>=16'}
     cpu: [x64]
     os: [win32]
+
+  '@cloudflare/workers-oauth-provider@1.4.0':
+    resolution: {integrity: sha512-NWiN3ixxM+P81fEd5AkBfpV34WgrWu9tLrf5gR6wl6eX6EQTlns/UvE5vRBYmlhtRqla0EFFrE+Mq91ZLeeR7g==}
 
   '@cloudflare/workers-types@5.20261110.1':
     resolution: {integrity: sha512-XOr3TDQ2sNDiP9zoZtdwYVhuLZ3aFY+G+G4iSeNO9p/HDSveZJpyCbUtmpEElaClLBe9hIzfN26qd0i/S7ksPg==}
@@ -2610,6 +2616,8 @@ snapshots:
 
   '@cloudflare/workerd-windows-64@1.20261110.1':
     optional: true
+
+  '@cloudflare/workers-oauth-provider@1.4.0': {}
 
   '@cloudflare/workers-types@5.20261110.1': {}
 
