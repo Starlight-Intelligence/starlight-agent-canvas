@@ -1,5 +1,5 @@
 import { OAuthProvider, type OAuthResourceAuth } from '@cloudflare/workers-oauth-provider';
-import { harnessSchema } from '@starlight-agent-canvas/world';
+import { harnessSchema, worldIdSchema } from '@starlight-agent-canvas/world';
 import { z } from 'zod';
 import { unauthorized, verifyServiceToken, WORLD_SCOPES, type Principal } from './auth.js';
 import type { Env } from './env.js';
@@ -123,6 +123,8 @@ const serviceTokenPropsSchema = z.object({
   kind: z.literal('service-token'),
   harness: harnessSchema,
   actor: z.string().min(1).max(200),
+  /** The token's world allowlist (MCP_SERVICE_TOKENS `worlds`), from verifyServiceToken. */
+  worlds: z.array(worldIdSchema).min(1).max(256).optional(),
 });
 
 /**
@@ -139,7 +141,7 @@ export function principalFromVerifiedContext(props: unknown, auth: OAuthResource
   if (auth.clientId === undefined && auth.userId === undefined) {
     const parsed = serviceTokenPropsSchema.safeParse(props);
     if (!parsed.success) return null;
-    return { harness: parsed.data.harness, actor: parsed.data.actor, via: 'service-token' };
+    return { harness: parsed.data.harness, actor: parsed.data.actor, via: 'service-token', ...(parsed.data.worlds ? { worlds: parsed.data.worlds } : {}) };
   }
   const parsed = oauthGrantPropsSchema.safeParse(props);
   if (!parsed.success || parsed.data.clientId !== auth.clientId) return null;
@@ -198,7 +200,10 @@ function buildProvider(origin: string, publicHost: string, allowlist: RedirectAl
     async resolveExternalToken({ token, env }) {
       const principal = await verifyServiceToken(token, env);
       if (!principal) return null;
-      return { audience: resource, props: { kind: 'service-token', harness: principal.harness, actor: principal.actor } };
+      return {
+        audience: resource,
+        props: { kind: 'service-token', harness: principal.harness, actor: principal.actor, ...(principal.worlds ? { worlds: [...principal.worlds] } : {}) },
+      };
     },
     clientRegistrationCallback({ clientMetadata }) {
       const uris = clientMetadata.redirect_uris;

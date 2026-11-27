@@ -1,5 +1,5 @@
 import { routeAgentRequest } from 'agents';
-import { AuthError, authenticate, authenticateMcp, encodePrincipal, PRINCIPAL_HEADER, unauthorized } from './auth.js';
+import { AuthError, authenticate, authenticateMcp, canAccessWorld, encodePrincipal, PRINCIPAL_HEADER, unauthorized, worldForbidden } from './auth.js';
 import type { Env } from './env.js';
 import { handleMcp, MCP_ROUTE } from './mcp.js';
 import { readMedia, signUpload } from './media.js';
@@ -29,9 +29,18 @@ export async function routeAuthenticated(request: Request, env: Env, ctx: Execut
 
   if (url.pathname === MCP_ROUTE) return handleMcp(request, env, ctx, principal);
   if (url.pathname === '/media/sign' && request.method === 'POST') return signUpload(request, env, principal);
-  if (url.pathname.startsWith('/media/object/') && request.method === 'GET') return readMedia(request, env);
+  if (url.pathname.startsWith('/media/object/') && request.method === 'GET') return readMedia(request, env, principal);
 
   if (url.pathname.startsWith('/agents/')) {
+    // /agents/<agent>/<worldId>[/...]: the instance name is the world id.
+    const segment = url.pathname.split('/')[3] ?? '';
+    let worldId: string;
+    try {
+      worldId = decodeURIComponent(segment);
+    } catch {
+      return Response.json({ error: { code: 'BAD_REQUEST', message: 'Malformed world id.' } }, { status: 400 });
+    }
+    if (!canAccessWorld(principal, worldId)) return worldForbidden(worldId);
     const headers = new Headers(request.headers);
     headers.set(PRINCIPAL_HEADER, encodePrincipal(principal));
     const forwarded = new Request(request, { headers });

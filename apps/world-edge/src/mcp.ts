@@ -3,7 +3,7 @@ import { importClaudeWhiteboard, newId, type WorldNode } from '@starlight-agent-
 import { getAgentByName } from 'agents';
 import { createMcpHandler } from 'agents/mcp/server';
 import type { z } from 'zod';
-import { principalScopes, type Principal, type WorldScope } from './auth.js';
+import { canAccessWorld, principalScopes, type Principal, type WorldScope } from './auth.js';
 import type { Env } from './env.js';
 import { d1Search, semanticSearch, toHit, type SearchHit, type SearchMode } from './indexing.js';
 import { TOOL_INPUTS } from './tools.js';
@@ -67,7 +67,15 @@ const WRITE = { readOnlyHint: false, destructiveHint: false } as const;
  */
 export function buildWorldMcpServer(env: Env, principal: Principal): McpServer {
   const server = new McpServer({ name: 'starlight-world', version: '0.1.0' });
-  const world = (worldId: string) => getAgentByName(env.WorldAgent, worldId);
+  const authorize = (worldId: string) => {
+    if (!canAccessWorld(principal, worldId)) {
+      throw new Error(JSON.stringify({ code: 'WORLD_FORBIDDEN', message: `This credential is not authorized for world "${worldId}".` }));
+    }
+  };
+  const world = (worldId: string) => {
+    authorize(worldId);
+    return getAgentByName(env.WorldAgent, worldId);
+  };
   const scoped = <A>(tool: keyof typeof TOOL_SCOPES, handler: (args: A) => Promise<ToolResult>) =>
     requireScope(principal, TOOL_SCOPES[tool], handler);
 
@@ -90,7 +98,10 @@ export function buildWorldMcpServer(env: Env, principal: Principal): McpServer {
     description: 'Ranked search over node titles and summaries. Semantic (Vectorize) when available, text match otherwise. Returns ids with positions.',
     inputSchema: TOOL_INPUTS.search,
     annotations: READ,
-  }, scoped('search', async ({ worldId, query, kinds, limit }) => ok(await searchWorld(env, worldId, query, kinds, limit ?? 20))));
+  }, scoped('search', async ({ worldId, query, kinds, limit }) => {
+    authorize(worldId);
+    return ok(await searchWorld(env, worldId, query, kinds, limit ?? 20));
+  }));
 
   server.registerTool('add_node', {
     description: 'Create a draft node. canon may be draft or proposed, never canon. id is generated when omitted.',
@@ -139,6 +150,7 @@ export function buildWorldMcpServer(env: Env, principal: Principal): McpServer {
     inputSchema: TOOL_INPUTS.import_whiteboard,
     annotations: WRITE,
   }, scoped('import_whiteboard', async ({ worldId, whiteboard, lexicon, title, dryRun }) => {
+    authorize(worldId);
     let imported: ReturnType<typeof importClaudeWhiteboard>;
     try {
       imported = importClaudeWhiteboard(whiteboard, { worldId, ...(title ? { title } : {}), ...(lexicon ? { lexicon } : {}), at: new Date().toISOString() });

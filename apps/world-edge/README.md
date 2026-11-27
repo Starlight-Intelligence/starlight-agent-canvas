@@ -88,7 +88,7 @@ Canon is never written here. `applyOps` refuses `canon` in any op, `importGraph`
 | `AI` | Workers AI | Embeddings with `@cf/baai/bge-base-en-v1.5` | no; as above |
 | `ACCESS_TEAM_DOMAIN` | var | `https://<team>.cloudflareaccess.com` | for browsers |
 | `ACCESS_AUD` | var | Access application AUD tag | for browsers |
-| `MCP_SERVICE_TOKENS` | secret | JSON array of `{name, harness, sha256}` for MCP clients | for MCP |
+| `MCP_SERVICE_TOKENS` | secret | JSON array of `{name, harness, sha256, worlds?}` for MCP clients; `worlds` limits a token to those world ids (media, `/agents`, MCP tools), omitted means every world | for MCP |
 | `MEDIA_SIGNING_KEY` | secret | HMAC key for signed upload URLs | for uploads |
 | `OAUTH_KV` | KV namespace | OAuth provider storage: clients, grants, hashed tokens, consent and sign-in transactions | for OAuth |
 | `PUBLIC_ORIGIN` | var | Public origin of the Worker, e.g. `https://world.example.com`: https, lowercase host, no port, no path, no trailing slash, nothing else (http only on `localhost`, `127.0.0.1` or `[::1]`, for local dev). It is the OAuth issuer, and the MCP resource is `<PUBLIC_ORIGIN>/mcp` | for OAuth |
