@@ -2,7 +2,7 @@
 
 import { forwardRef, useEffect, useState } from 'react';
 import { Activity, Hand, Link2, Maximize2, MousePointer2, Plus, Search, X, ZoomIn, ZoomOut } from 'lucide-react';
-import { useStore } from '@xyflow/react';
+import { useViewportStore } from '@xyflow/react';
 import type { SemanticZoomLevel } from '@starlight-agent-canvas/world';
 import type { ActivityEntry, SearchHit, WorldSource } from '@/lib/world/source';
 import { KindGlyph } from './kinds';
@@ -179,7 +179,7 @@ const LEVEL_LABEL: Record<SemanticZoomLevel, string> = { cluster: 'Cluster', car
 export function Toolbar({ tool, onTool, onAdd, onZoomIn, onZoomOut, onFit, canEdit }: ToolbarProps) {
   const level = useSemanticLevel();
   // Rounded so the readout re-renders per percent, not per zoom event.
-  const zoom = useStore((s) => Math.round(s.transform[2] * 100) / 100);
+  const zoom = useViewportStore((s) => Math.round(s.transform[2] * 100) / 100);
   const toolBtn = (id: Tool, label: string, key: string, icon: React.ReactNode) => (
     <button
       type="button"
