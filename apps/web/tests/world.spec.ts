@@ -167,6 +167,22 @@ test.describe('world canvas', () => {
     await expect(inspector.getByLabel('Summary')).toHaveValue('Draft that must survive a move');
   });
 
+  test('after a successful save the inspector resyncs fields to the saved, normalized value', async ({ page }, info) => {
+    const id = info.project.name === 'mobile' ? 'n_gen_13' : 'n_gen_12';
+    await page.goto(`/world/demo?node=${id}`);
+    await ready(page);
+    const inspector = page.getByRole('complementary', { name: 'Inspector' });
+    const before = await versionOf(inspector);
+    await inspector.getByLabel('Title').fill('  Padded title  ');
+    await inspector.getByLabel('Tags').fill('alpha, , beta ,');
+    await inspector.getByRole('button', { name: 'Save changes' }).click();
+    await expect.poll(() => versionOf(inspector)).toBeGreaterThan(before);
+    // The saved node has the trimmed title and cleaned tags; the fields show them, not the raw draft.
+    await expect(inspector.getByLabel('Title')).toHaveValue('Padded title');
+    await expect(inspector.getByLabel('Tags')).toHaveValue('alpha, beta');
+    await expect(inspector.getByText('Unsaved changes')).toHaveCount(0);
+  });
+
   test('a rejected save keeps the draft and shows it as unsaved', async ({ page }, info) => {
     const id = info.project.name === 'mobile' ? 'n_gen_9' : 'n_gen_8';
     await page.route('**/api/worlds/demo/ops', (route) =>

@@ -64,6 +64,11 @@ export const Inspector = forwardRef<HTMLInputElement, InspectorProps>(function I
   const edited = useRef(new Set<DraftField>());
   const shownId = useRef<string | null>(null);
   const [saveFailed, setSaveFailed] = useState(false);
+  // Bumped after a successful save so the fields that were just saved resync
+  // from the node as stored (trimmed title, cleaned tags, any server
+  // normalization), even when the node version changed while they were still
+  // marked edited and does not change again.
+  const [resync, setResync] = useState(0);
   useEffect(() => {
     if (!node) return;
     if (shownId.current !== node.id) {
@@ -78,7 +83,7 @@ export const Inspector = forwardRef<HTMLInputElement, InspectorProps>(function I
     if (!kept.has('summary')) setSummary(node.summary);
     if (!kept.has('body')) setBody(node.body);
     if (!kept.has('tags')) setTags(node.tags.join(', '));
-  }, [node?.id, node?.version]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [node?.id, node?.version, resync]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const edit = <T,>(field: DraftField, set: (v: T) => void) => (value: T) => {
     edited.current.add(field);
@@ -142,6 +147,7 @@ export const Inspector = forwardRef<HTMLInputElement, InspectorProps>(function I
             if (ok) {
               // Fields typed in again while saving stay a draft.
               for (const f of [...edited.current]) if (latest.current[f] === submitted[f]) edited.current.delete(f);
+              setResync((n) => n + 1);
             }
           }}
         >
