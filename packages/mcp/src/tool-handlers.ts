@@ -14,9 +14,12 @@ import {
   ingestPdf,
   ingestUrl,
   ingestYoutube,
+  listTemplates,
   mapSourceIntakeToCanvas,
+  nodeflowRunRequestSchema,
   runActionInputSchema,
   updateNodeInputSchema,
+  upsertMediaNodeInputSchema,
   type AddNodeInput,
   type ConnectNodesInput,
   type CreateCanvasInput,
@@ -24,8 +27,10 @@ import {
   type CanvasExportFormat,
   type EnrichSourceInput,
   type IngestedSource,
+  type NodeflowRunRequest,
   type RunActionInput,
   type UpdateNodeInput,
+  type UpsertMediaNodeInput,
 } from '@starlight-agent-canvas/core';
 import { describeCanvasSourceReadiness } from '@starlight-agent-canvas/core/readiness';
 
@@ -490,6 +495,28 @@ export function createToolHandlers(store = new FileCanvasStore(), readContinuity
     async compare_canvas_checkpoints(args: { canvasId: string; beforeId: string; afterId?: string }): Promise<ToolResult> {
       const comparison = checkpointReviewView(await store.compareCheckpoints(args.canvasId, args.beforeId, args.afterId));
       return ok(jsonText(comparison), { comparison });
+    },
+
+    async list_nodeflow_templates(): Promise<ToolResult> {
+      const templates = listTemplates();
+      return ok(jsonText(templates), { templates });
+    },
+
+    async upsert_media_node(args: { canvasId: string } & UpsertMediaNodeInput): Promise<ToolResult> {
+      const { canvasId, ...input } = args;
+      const result = await store.upsertMediaNode(canvasId, upsertMediaNodeInputSchema.parse(input));
+      return ok(`${result.action === 'created' ? 'Created' : 'Updated'} media node ${result.node.title} (${result.node.id})`, result);
+    },
+
+    async run_nodeflow_subgraph(args: { canvasId: string } & NodeflowRunRequest): Promise<ToolResult> {
+      const { canvasId, ...req } = args;
+      const outcome = await store.runNodeflow(canvasId, nodeflowRunRequestSchema.parse(req));
+      return ok(`Nodeflow ${outcome.result.mode} ${outcome.result.status}: ${outcome.result.steps.length} step(s).`, outcome);
+    },
+
+    async export_nodeflow_bundle(args: { canvasId: string; nodeIds?: string[] }): Promise<ToolResult> {
+      const manifest = await store.exportNodeflowBundle(args.canvasId, args.nodeIds ?? []);
+      return ok(jsonText(manifest), { manifest });
     },
   };
 }

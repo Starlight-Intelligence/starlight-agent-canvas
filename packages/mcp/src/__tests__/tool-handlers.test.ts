@@ -305,4 +305,46 @@ describe('MCP tool handlers', () => {
     expect(latestText).toContain('Codex-ready visual notes');
     expect(latestText).not.toContain('kind":"note"');
   });
+
+  it('lists multimodal templates, upserts media nodes, runs dry-run/gated nodeflows, and exports R2 bundles', async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), 'agent-canvas-mcp-nodeflow-'));
+    const handlers = createToolHandlers(new FileCanvasStore(home));
+
+    const templates = await handlers.list_nodeflow_templates();
+    const list = templates.structuredContent?.templates as Array<{ id: string }>;
+    expect(list.map((t) => t.id)).toContain('brand_campaign_pipeline');
+
+    const created = await handlers.create_canvas({
+      title: 'Campaign Flow',
+      template: 'brand_campaign_pipeline',
+    });
+    const canvas = created.structuredContent?.canvas as { id: string; nodes: Array<{ id: string }> };
+
+    const upserted = await handlers.upsert_media_node({
+      canvasId: canvas.id,
+      kind: 'audio_voice',
+      title: 'Intro SFX layer',
+      body: 'Subtle crystalline chime under intro title',
+      provider: 'elevenlabs',
+      metadata: { voiceMode: 'sfx' },
+    });
+    expect((upserted.structuredContent?.node as { kind: string }).kind).toBe('audio_voice');
+
+    const run = await handlers.run_nodeflow_subgraph({
+      canvasId: canvas.id,
+      mode: 'dry_run',
+      maxCostUsd: 0.5,
+    });
+    const runResult = run.structuredContent?.result as {
+      status: string;
+      steps: Array<{ status: string }>;
+      r2Manifest: { schemaVersion: string; graphSha256: string };
+    };
+    expect(runResult.status).toBe('completed');
+    expect(runResult.steps.length).toBeGreaterThanOrEqual(5);
+    expect(runResult.r2Manifest.schemaVersion).toBe('starlight.r2Bundle.v1');
+
+    const bundle = await handlers.export_nodeflow_bundle({ canvasId: canvas.id });
+    expect((bundle.structuredContent?.manifest as { artifactCount: number }).artifactCount).toBeGreaterThanOrEqual(5);
+  });
 });

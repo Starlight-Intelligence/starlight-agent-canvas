@@ -4,7 +4,16 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { canvasIdSchema, canvasRecordSchema, exportFormatSchema, websitePlanSchema } from '@starlight-agent-canvas/core';
+import {
+  canvasIdSchema,
+  canvasRecordSchema,
+  exportFormatSchema,
+  mediaNodeKindSchema,
+  mediaProviderSchema,
+  nodeflowExecutionModeSchema,
+  nodeKindSchema,
+  websitePlanSchema,
+} from '@starlight-agent-canvas/core';
 import { createToolHandlers } from './tool-handlers.js';
 import { guideResources } from './guides.js';
 
@@ -150,7 +159,16 @@ export function createAgentCanvasMcpServer() {
       inputSchema: {
         title: z.string().min(1),
         description: z.string().optional(),
-        template: z.enum(['blank', 'competitor_teardown', 'repo_product_planning', 'agent_workflow_design', 'content_synthesis']).optional(),
+        template: z.enum([
+          'blank',
+          'competitor_teardown',
+          'repo_product_planning',
+          'agent_workflow_design',
+          'content_synthesis',
+          'brand_campaign_pipeline',
+          'multi_llm_architecture_review',
+          'knowledge_distillation_studio',
+        ]).optional(),
       },
       annotations: SAFE_LOCAL_WRITE,
     },
@@ -177,7 +195,7 @@ export function createAgentCanvasMcpServer() {
       description: 'Add a typed node to a local canvas.',
       inputSchema: {
         canvasId: canvasIdSchema,
-        kind: z.enum(['note', 'source_url', 'source_pdf', 'source_youtube', 'source_video', 'source_image', 'prompt', 'mcp_tool', 'agent_run', 'output']),
+        kind: nodeKindSchema,
         title: z.string().min(1),
         body: z.string().optional(),
         position: z.object({ x: z.number(), y: z.number() }).optional(),
@@ -451,6 +469,56 @@ export function createAgentCanvasMcpServer() {
     title: 'Compare Canvas Checkpoints', description: 'Compare stable records and changed fields between a checkpoint and the current canvas, or two checkpoints. Position-only changes are identified separately.',
     inputSchema: { canvasId: canvasIdSchema, beforeId: canvasIdSchema, afterId: canvasIdSchema.optional() }, annotations: READ_ONLY_LOCAL,
   }, async (args) => handlers.compare_canvas_checkpoints(args));
+
+  server.registerTool('list_nodeflow_templates', {
+    title: 'List Nodeflow Templates',
+    description: 'List available canvas templates including multimodal brand campaign, cross-LLM review, and knowledge distillation nodeflows.',
+    inputSchema: {},
+    annotations: READ_ONLY_LOCAL,
+  }, async () => handlers.list_nodeflow_templates());
+
+  server.registerTool('upsert_media_node', {
+    title: 'Upsert Media or Council Node',
+    description: 'Create or update a typed multimodal/council node (llm_council, image_gen, video_gen, audio_voice, taste_gate) on a local canvas.',
+    inputSchema: {
+      canvasId: canvasIdSchema,
+      nodeId: z.string().min(1).optional(),
+      kind: mediaNodeKindSchema,
+      title: z.string().min(1),
+      body: z.string().optional(),
+      provider: mediaProviderSchema.optional(),
+      position: z.object({ x: z.number(), y: z.number() }).optional(),
+      metadata: z.record(z.string(), z.unknown()).optional(),
+    },
+    annotations: SAFE_LOCAL_WRITE,
+  }, async (args) => handlers.upsert_media_node({
+    ...args,
+    body: args.body ?? '',
+    metadata: args.metadata ?? {},
+  }));
+
+  server.registerTool('run_nodeflow_subgraph', {
+    title: 'Run Nodeflow Subgraph',
+    description: 'Execute multimodal/council nodes in topological DAG order. Defaults to dry_run; live mode enforces ElevenLabs consent and Higgsfield /hf-plan gates plus spend caps.',
+    inputSchema: {
+      canvasId: canvasIdSchema,
+      nodeIds: z.array(z.string().min(1)).optional(),
+      mode: nodeflowExecutionModeSchema.optional(),
+      maxCostUsd: z.number().positive().max(5).optional(),
+      consentVerified: z.boolean().optional(),
+    },
+    annotations: SAFE_LOCAL_WRITE,
+  }, async (args) => handlers.run_nodeflow_subgraph(args));
+
+  server.registerTool('export_nodeflow_bundle', {
+    title: 'Export R2 Nodeflow Bundle Manifest',
+    description: 'Build a SHA-256 provenance manifest ready for Cloudflare R2 artifact storage.',
+    inputSchema: {
+      canvasId: canvasIdSchema,
+      nodeIds: z.array(z.string().min(1)).optional(),
+    },
+    annotations: READ_ONLY_LOCAL,
+  }, async (args) => handlers.export_nodeflow_bundle(args));
 
   return server;
 }

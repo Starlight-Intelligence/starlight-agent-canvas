@@ -2,7 +2,8 @@ import { mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { canvasIdSchema, canvasIntakeTraceSchema, canvasRecordSchema, addNodeInputSchema, connectNodesInputSchema, createCanvasInputSchema, enrichSourceInputSchema, exportCanvasOptionsSchema, ingestSourceInputSchema, updateNodeInputSchema, type AddNodeInput, type CanvasArtifact, type CanvasEdge, type CanvasIntakeTrace, type CanvasNode, type CanvasRecord, type ConnectNodesInput, type CreateCanvasInput, type EnrichSourceInput, type IngestSourceInput, type RunActionInput, type SourceEnrichmentKind, type UpdateNodeInput, type CanvasExportFormat, type CanvasExportOptions } from './schemas.js';
+import { canvasIdSchema, canvasIntakeTraceSchema, canvasRecordSchema, addNodeInputSchema, connectNodesInputSchema, createCanvasInputSchema, enrichSourceInputSchema, exportCanvasOptionsSchema, ingestSourceInputSchema, updateNodeInputSchema, upsertMediaNodeInputSchema, type AddNodeInput, type CanvasArtifact, type CanvasEdge, type CanvasIntakeTrace, type CanvasNode, type CanvasRecord, type ConnectNodesInput, type CreateCanvasInput, type EnrichSourceInput, type IngestSourceInput, type NodeflowRunRequest, type NodeflowRunResult, type R2BundleManifest, type RunActionInput, type SourceEnrichmentKind, type UpdateNodeInput, type UpsertMediaNodeInput, type CanvasExportFormat, type CanvasExportOptions } from './schemas.js';
+import { buildR2BundleManifest, createDefaultNodeflowAdapters, executeNodeflowSubgraph, type NodeflowAdapters } from './nodeflow-runner.js';
 import { buildSourceChunks, chunksForArtifact } from './chunks.js';
 import { createCanvasRecord } from './templates.js';
 import { exportCanvasAsAgentContext, exportCanvasAsCodexHandoff, exportCanvasAsMarkdown, scopeCanvasToNodes } from './exporters.js';
@@ -656,6 +657,81 @@ export class FileCanvasStore {
       await this.saveCanvasFile(result.canvas);
       return result;
     });
+  }
+
+  async upsertMediaNode(canvasId: string, input: UpsertMediaNodeInput): Promise<{ canvas: CanvasRecord; node: CanvasNode; action: 'created' | 'updated' }> {
+    return this.withCanvasLock(canvasId, async (safeCanvasId) => {
+      const parsed = upsertMediaNodeInputSchema.parse(input);
+      const safeNodeId = parsed.nodeId ? canvasIdSchema.parse(parsed.nodeId) : undefined;
+      const canvas = await this.getCanvas(safeCanvasId);
+      const timestamp = nowIso();
+      const metadata = {
+        ...parsed.metadata,
+        ...(parsed.provider ? { provider: parsed.provider } : {}),
+      };
+      if (safeNodeId) {
+        const idx = canvas.nodes.findIndex((n) => n.id === safeNodeId);
+        if (idx >= 0) {
+          const existing = canvas.nodes[idx];
+          if (existing.metadata.websiteProjectionOf || existing.metadata.role === WEBSITE_ROLE) {
+            throw new Error('Edit website content in the website direction workbench.');
+          }
+          const updated: CanvasNode = {
+            ...existing,
+            kind: parsed.kind,
+            title: parsed.title,
+            body: parsed.body || existing.body,
+            position: parsed.position ?? existing.position,
+            metadata: { ...existing.metadata, ...metadata },
+            updatedAt: timestamp,
+          };
+          const nodes = [...canvas.nodes];
+          nodes[idx] = updated;
+          const next = await this.saveCanvasFile({ ...canvas, updatedAt: timestamp, nodes });
+          return { canvas: next, node: updated, action: 'updated' };
+        }
+      }
+      const node: CanvasNode = {
+        id: safeNodeId ?? makeId('node', parsed.title),
+        kind: parsed.kind,
+        title: parsed.title,
+        body: parsed.body,
+        position: parsed.position ?? {
+          x: 120 + (canvas.nodes.length % 4) * 280,
+          y: 160 + Math.floor(canvas.nodes.length / 4) * 180,
+        },
+        metadata,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      };
+      const next = await this.saveCanvasFile({
+        ...canvas,
+        updatedAt: timestamp,
+        nodes: [...canvas.nodes, node],
+      });
+      return { canvas: next, node, action: 'created' };
+    });
+  }
+
+  async runNodeflow(
+    canvasId: string,
+    request: NodeflowRunRequest = {},
+    adapters: NodeflowAdapters = createDefaultNodeflowAdapters({
+      FLEET_MCP_URL: process.env.STARLIGHT_FLEET_MCP_URL,
+      FLEET_TOKEN: process.env.STARLIGHT_FLEET_TOKEN,
+    }),
+  ): Promise<{ canvas: CanvasRecord; result: NodeflowRunResult }> {
+    return this.withCanvasLock(canvasId, async (safeCanvasId) => {
+      const canvas = await this.getCanvas(safeCanvasId);
+      const outcome = await executeNodeflowSubgraph(canvas, request, adapters);
+      const saved = await this.saveCanvasFile(outcome.canvas);
+      return { canvas: saved, result: outcome.result };
+    });
+  }
+
+  async exportNodeflowBundle(canvasId: string, nodeIds: string[] = []): Promise<R2BundleManifest> {
+    const canvas = await this.getCanvas(canvasId);
+    return buildR2BundleManifest(canvas, nodeIds);
   }
 
   async appendIntakeTrace(canvasId: string, trace: CanvasIntakeTrace, limit = 50): Promise<CanvasRecord> {

@@ -9,6 +9,7 @@ export * from './home.js';
 export * from './ids.js';
 export * from './ingest.js';
 export * from './intake.js';
+export * from './nodeflow-runner.js';
 export * from './schemas.js';
 export * from './source-intake.js';
 export * from './store.js';
